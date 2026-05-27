@@ -294,22 +294,35 @@ async function handleUpdateTournament(req, slug) {
 }
 
 async function handleDeleteTournament(slug) {
-  // Hartes Delete: löscht config + snapshot + assignments + Index-Eintrag.
-  // Repo-Datei-basierte Tournaments (Phase 1, z.B. dc2026.json im Repo) bleiben
-  // erhalten — die kommen ja aus dem Repo, der Loader fallback'd dorthin.
   const store = getStore(STORE_NAME);
-  await store.delete(`${slug}/config.json`).catch(() => {});
+
+  // Snapshot + Assignments immer löschen
   await store.delete(`${slug}/snapshot.json`).catch(() => {});
   await store.delete(`${slug}/assignments.json`).catch(() => {});
   await store.delete(`${slug}/refereeAssignments.json`).catch(() => {});
+
+  // Prüfen: war das ein Repo-basiertes Tournament?
+  const existing = await getTournament(slug);
+  const isRepoBased = existing?._source === 'repo';
+
+  if (isRepoBased) {
+    // Tombstone schreiben, der die Repo-Datei überschattet
+    await store.setJSON(`${slug}/config.json`, {
+      slug, _deleted: true, deletedAt: new Date().toISOString(),
+    });
+    console.log(`[admin] tournament ${slug} tombstoned (was repo-based)`);
+  } else {
+    // Normal löschen
+    await store.delete(`${slug}/config.json`).catch(() => {});
+    console.log(`[admin] tournament ${slug} deleted`);
+  }
 
   const index = (await store.get('index.json', { type: 'json', consistency: 'strong' })) ?? { tournaments: [] };
   index.tournaments = index.tournaments.filter(t => t.slug !== slug);
   index.updatedAt = new Date().toISOString();
   await store.setJSON('index.json', index);
 
-  console.log(`[admin] tournament ${slug} deleted`);
-  return jsonResponse({ ok: true, slug, deleted: true });
+  return jsonResponse({ ok: true, slug, deleted: true, tombstoned: isRepoBased });
 }
 
 async function handleStatus(req, slug) {

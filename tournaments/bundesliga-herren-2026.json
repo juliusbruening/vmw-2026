@@ -3,18 +3,23 @@
   "name": "1. Bundesliga Herren Saison 2026",
   "type": "external",
   "externalUrl": "https://vmw-kanupolo-live.netlify.app",
+  "externalDays": [
+    { "date": "17.-18.05.2026", "label": "Spieltag 1 — Berlin",     "url": "https://vmw-kanupolo-live.netlify.app/?day=1" },
+    { "date": "21.-22.06.2026", "label": "Spieltag 2 — Mannheim",   "url": "https://vmw-kanupolo-live.netlify.app/?day=2" },
+    { "date": "30.-31.08.2026", "label": "Spieltag 3 — Bochum",     "url": "https://vmw-kanupolo-live.netlify.app/?day=3" },
+    { "date": "19.-20.09.2026", "label": "Spieltag 4 — Essen",      "url": "https://vmw-kanupolo-live.netlify.app/?day=4" }
+  ],
   "connector": null,
   "showStandings": true,
+  "showHausliga": false,
   "source": null,
   "status": "active",
-  "dates": ["2026-05-23"],
+  "dates": ["2026-05-17"],
   "expectedDates": null,
   "timezone": "Europe/Berlin",
   "pendingTeamSelection": false,
   "lastRediscoveryAt": null,
-  "ourTeams": [
-    { "code": "Men1", "pillLabel": "Herren 1", "short": "VMW Herren 1", "name": "VMW Berlin Herren 1", "tid": null }
-  ],
+  "ourTeams": [],
   "createdAt": "2026-05-26T15:00:00Z",
   "updatedAt": "2026-05-26T15:00:00Z"
 }

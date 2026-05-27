@@ -72,8 +72,6 @@ let CURRENT_CONFIG = null;
 function applyConfigToFrontend(uiConfig){
   if (!uiConfig) return;
   CURRENT_CONFIG = uiConfig;
-  // TEAMS aus ourTeams ableiten — division wird aus dem Snapshot per match.division gemappt;
-  // wir füllen "division" hier nur soft als Fallback (für Filter-Logik).
   TEAMS = (uiConfig.ourTeams || []).map(t => ({
     code: t.code,
     short: t.short,
@@ -81,9 +79,180 @@ function applyConfigToFrontend(uiConfig){
     name: t.name,
     division: divisionForCode(t.code),
   }));
-  // Date-Map aus config.dates (1-basiert)
   TOURNAMENT_DATES = {};
   (uiConfig.dates || []).forEach((d, i) => { TOURNAMENT_DATES[i + 1] = d; });
+
+  // ─── Dynamische UI-Updates ─────────────────────────────────────────
+  // 1) Header-Title aus config
+  applyHeaderTitle(uiConfig);
+  // 2) Tag-Switches aus config.dates (statt hardcoded Sa/So/Mo 23.-25. Mai)
+  applyDaySwitches(uiConfig);
+  // 3) Footer-Link aus config.source
+  applyFooterLink(uiConfig);
+  // 4) Hausliga-Tab ein/ausblenden je nach config.showHausliga
+  applyHausligaVisibility(uiConfig);
+  // 5) Team-Pills im Spielplan aus ourTeams
+  applyTeamPills(uiConfig);
+}
+
+function applyHeaderTitle(uiConfig){
+  const titleEl = document.querySelector('header.app .title');
+  if (!titleEl) return;
+  const dateRange = formatDateRange(uiConfig.dates || []);
+  titleEl.innerHTML = `VMW Berlin<small>${escapeHtml(uiConfig.name || '')}${dateRange ? ' · ' + dateRange : ''}</small>`;
+  // Tab-Title auch updaten
+  document.title = uiConfig.name ? `${uiConfig.name} · VMW` : 'VMW Live-App';
+}
+
+function formatDateRange(dates){
+  if (!dates?.length) return '';
+  const first = parseIsoDate(dates[0]);
+  const last  = parseIsoDate(dates[dates.length - 1]);
+  if (!first) return '';
+  const month = first.toLocaleDateString('de-DE', { month: 'long', timeZone: 'Europe/Berlin' });
+  if (dates.length === 1) {
+    return `${first.getDate()}. ${month} ${first.getFullYear()}`;
+  }
+  if (last && last.getMonth() === first.getMonth() && last.getFullYear() === first.getFullYear()) {
+    return `${first.getDate()}.–${last.getDate()}. ${month} ${first.getFullYear()}`;
+  }
+  return `${first.toLocaleDateString('de-DE', { day:'numeric', month:'short' })} – ${last.toLocaleDateString('de-DE', { day:'numeric', month:'short', year:'numeric' })}`;
+}
+
+function parseIsoDate(s){
+  if (!s) return null;
+  const d = new Date(s + 'T12:00:00+02:00');
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function applyDaySwitches(uiConfig){
+  const dates = uiConfig.dates || [];
+  for (const containerId of ['liveDaySwitch', 'planDaySwitch']) {
+    const el = document.getElementById(containerId);
+    if (!el) continue;
+    el.innerHTML = '';
+    dates.forEach((iso, i) => {
+      const d = parseIsoDate(iso);
+      if (!d) return;
+      const day = i + 1;
+      const weekday = d.toLocaleDateString('de-DE', { weekday: 'short', timeZone: 'Europe/Berlin' });
+      const monthDay = d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short', timeZone: 'Europe/Berlin' });
+      const btn = document.createElement('button');
+      btn.dataset.day = String(day);
+      if (day === state.liveDay) btn.classList.add('active');
+      btn.innerHTML = `${weekday}<small>${monthDay}</small>`;
+      el.appendChild(btn);
+    });
+    // Click-Handler reattachen (alte Listener sind durch innerHTML weg)
+    el.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => {
+        const key = containerId === 'liveDaySwitch' ? 'liveDay' : 'planDay';
+        state[key] = Number(b.dataset.day);
+        save(key, state[key]);
+        if (containerId === 'liveDaySwitch') {
+          state.liveExpand = { next:false, ref:false, done:false };
+          renderLive();
+        } else {
+          renderPlan();
+        }
+      });
+    });
+  }
+}
+
+function applyFooterLink(uiConfig){
+  const url = uiConfig.source?.matchListUrl
+    ? `${uiConfig.source.matchListUrl}?day=1${uiConfig.source.matchListVid ? '&vid=' + uiConfig.source.matchListVid : ''}`
+    : (uiConfig.source?.viewUrl || 'https://cpt.kayakers.nl/');
+  document.querySelectorAll('.app-footer a[href*="kayakers"], .modal a[href*="kayakers"]').forEach(a => {
+    a.href = url;
+  });
+}
+
+function applyHausligaVisibility(uiConfig){
+  // Default: zeigen wenn explizit aktiv ODER wenn DC2026 (Backwards-Compat).
+  const show = uiConfig.showHausliga === true;
+  const hausTab = document.querySelector('.tabbar button[data-tab="haus"]');
+  const hausPanel = document.getElementById('panel-haus');
+  if (hausTab) hausTab.style.display = show ? '' : 'none';
+  if (hausPanel) hausPanel.style.display = show ? '' : 'none';
+  if (!show && state.tab === 'haus') {
+    state.tab = 'live';
+    save('tab', 'live');
+  }
+}
+
+function applyDivisionPills(snapshot){
+  const el = document.getElementById('planDivisionPills');
+  if (!el || !snapshot?.matches) return;
+  // Sammle alle Divisions die im Snapshot vorkommen, samt Original-Label.
+  const map = new Map();   // code → label
+  for (const m of snapshot.matches) {
+    if (!m.division) continue;
+    const code = m.divisionCode || m.division;
+    if (!map.has(code)) {
+      // Label vorzugsweise aus dem internen divisionLabel-Mapping, sonst Original
+      const label = (typeof divisionLabel === 'function' ? divisionLabel(m.division) : null) || m.division;
+      map.set(code, label);
+    }
+  }
+  el.innerHTML = '';
+  const allBtn = document.createElement('button');
+  allBtn.dataset.div = 'all';
+  allBtn.textContent = 'Alle Klassen';
+  el.appendChild(allBtn);
+  // Sortierung: U14 → U16 → U21 → Women → Men1 → Men2 → Rest alphabetisch
+  const order = ['U14','U16','U21','Women','Men1','Men2'];
+  const sorted = [...map.entries()].sort((a,b) => {
+    const ia = order.indexOf(a[0]); const ib = order.indexOf(b[0]);
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    if (ia >= 0) return -1;
+    if (ib >= 0) return 1;
+    return a[1].localeCompare(b[1]);
+  });
+  sorted.forEach(([code, label]) => {
+    const btn = document.createElement('button');
+    btn.dataset.div = code;
+    btn.textContent = label;
+    el.appendChild(btn);
+  });
+  // Active-State + Click-Handler reattachen
+  el.querySelectorAll('button').forEach(b => {
+    if (b.dataset.div === state.planDivision) b.classList.add('active');
+    b.addEventListener('click', () => {
+      state.planDivision = b.dataset.div;
+      save('spielplanDivision', state.planDivision);
+      renderPlan();
+    });
+  });
+}
+
+function applyTeamPills(uiConfig){
+  const teams = uiConfig.ourTeams || [];
+  for (const containerId of ['planTeamPills', 'teamPills', 'scorerPills']) {
+    const el = document.getElementById(containerId);
+    if (!el) continue;
+    el.innerHTML = '';
+    if (containerId === 'planTeamPills' || containerId === 'scorerPills') {
+      const allBtn = document.createElement('button');
+      allBtn.dataset.team = 'all';
+      allBtn.textContent = 'Alle' + (containerId === 'scorerPills' ? '' : ' Teams');
+      el.appendChild(allBtn);
+    }
+    teams.forEach(t => {
+      const btn = document.createElement('button');
+      btn.dataset.team = t.code;
+      btn.textContent = t.pillLabel || t.code;
+      el.appendChild(btn);
+    });
+    // active-State setzen
+    const stateKey = containerId === 'planTeamPills' ? state.planFilter
+                   : containerId === 'teamPills'     ? state.teamView
+                   :                                    state.scorerFilt;
+    el.querySelectorAll('button').forEach(b => {
+      if (b.dataset.team === stateKey) b.classList.add('active');
+    });
+  }
 }
 
 // Helper: Code → kanonische Division (für TEAMS.division-Fallback)
@@ -1077,6 +1246,8 @@ async function fetchData(){
     }
     if (data.config) applyConfigToFrontend(data.config);
     state.snapshot = data.snapshot;
+    // Division-Pills aus dem Snapshot ableiten (vorher hardcoded U14/U16/U21/Damen/Herren1/2)
+    applyDivisionPills(state.snapshot);
     // Phase 3: Rollen-Assignments + Schiri-Index für den Picker bereitstellen
     state.assignments = data.assignments || null;
     state.referees    = Array.isArray(data.referees) ? data.referees : [];

@@ -47,13 +47,24 @@ export const kayakersConnector = {
       const countryCode = countryMatch ? countryMatch[1] : null;
       const dateHeader = parent.prev('h4').first().text().trim();
 
+      // Datum als ISO parsen für Sortierung + Upcoming/Past-Filter
+      const dateIso = parseDateRangeStart(dateHeader);
+
       tournaments.push({
         slug,
         name,
         viewUrl: `${BASE_ORIGIN}/View/${slug}`,
         countryCode,
         dateRange: dateHeader || null,
+        dateIso,                                  // YYYY-MM-DD oder null
       });
+    });
+
+    // Sortieren chronologisch (jüngste zuerst)
+    tournaments.sort((a, b) => {
+      const da = a.dateIso || '0000-00-00';
+      const db = b.dateIso || '0000-00-00';
+      return db.localeCompare(da);
     });
 
     return country
@@ -262,6 +273,39 @@ function parseFirstDateFromHtml(html) {
   const month = monthMap[monthCapital] ?? monthMap[monthKey];
   if (!month) return null;
   return `${year || new Date().getFullYear()}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+}
+
+/**
+ * Parsed das erste Datum aus einem Range-Header wie "May 23rd - May 25th" oder
+ * "Aug 8th, 25" oder "Apr 25th - Apr 26th" zu YYYY-MM-DD.
+ * Returnt null bei nicht-parsebarem Input.
+ */
+function parseDateRangeStart(headerText) {
+  if (!headerText) return null;
+  const monthMap = {
+    Jan: 1, Feb: 2, Mar: 3, Mär: 3, Apr: 4, May: 5, Mai: 5,
+    Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Okt: 10, Nov: 11, Dec: 12, Dez: 12,
+  };
+  // kayakers schreibt z.B. "May 23rd - May 25th" oder "Aug 8th, 25" oder "Sep 5th - Sep 6th"
+  // ",25" hinter dem Tag = Jahr 2025
+  const re = /\b(Jan|Feb|Mar|Mär|Apr|May|Mai|Jun|Jul|Aug|Sep|Oct|Okt|Nov|Dec|Dez)\w*\s+(\d{1,2})(?:st|nd|rd|th|\.)?(?:,?\s*(\d{2,4}))?/i;
+  const m = headerText.match(re);
+  if (!m) return null;
+  const month = monthMap[m[1][0].toUpperCase() + m[1].slice(1).toLowerCase()];
+  if (!month) return null;
+  const day = String(m[2]).padStart(2, '0');
+  let year;
+  if (m[3]) {
+    year = Number(m[3]);
+    if (year < 100) year += 2000;
+  } else {
+    // Kein Jahr → aktuelle Saison (wenn Monat schon vorbei: nächstes Jahr)
+    const now = new Date();
+    year = now.getFullYear();
+    const monthNow = now.getMonth() + 1;
+    if (month < monthNow - 1) year += 1;
+  }
+  return `${year}-${String(month).padStart(2,'0')}-${day}`;
 }
 
 function extractDateHintsFromHtml(html) {

@@ -37,6 +37,7 @@ export default async (req) => {
     expectedDates: t.expectedDates || null,
     showStandings: !!t.showStandings,
     externalUrl: t.externalUrl || null,
+    externalDays: Array.isArray(t.externalDays) ? t.externalDays : null,
   }));
 
   return new Response(JSON.stringify({ tournaments: compact }), {

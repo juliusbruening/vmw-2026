@@ -58,10 +58,12 @@ export default async (req) => {
       type: config.type ?? 'tournament',
       status: config.status,
       showStandings: !!config.showStandings,
+      showHausliga: !!config.showHausliga,
       dates: config.dates ?? [],
       expectedDates: config.expectedDates ?? null,
       ourTeams: config.ourTeams ?? [],
       pendingTeamSelection: !!config.pendingTeamSelection,
+      source: config.source ?? null,
     };
 
     const payload = {
