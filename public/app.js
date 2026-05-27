@@ -1167,6 +1167,8 @@ document.getElementById('scorersMoreBtn').addEventListener('click', ()=>{
 // Auf /, /admin, /me/<code> übernimmt phase3.js komplett — siehe dort.
 if (CURRENT_SLUG) {
   setTab(state.tab);
+  // Sichtbar machen (war via inline-CSS in index.html versteckt um Flackern zu vermeiden)
+  document.body.style.visibility = 'visible';
   fetchData();
   setInterval(fetchData, POLL_INTERVAL_MS);
 }

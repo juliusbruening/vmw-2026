@@ -10,6 +10,9 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/phase3.css">
+  <!-- Hide body until JS hat entschieden, ob /, /t/<slug>, /admin, /me — verhindert
+       das kurze Aufblitzen der DC2026-UI bevor die Landing oder das Login rendert. -->
+  <style>body { visibility: hidden; }</style>
 </head>
 <body>
 <div class="container">

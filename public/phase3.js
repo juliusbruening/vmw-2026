@@ -128,7 +128,16 @@
               localStorage.setItem('vmw.role', activeTab);
               toast(`Eingeloggt als ${activeTab}`, 'success');
               closeModal();
-              if (typeof window.renderActiveTab === 'function') window.renderActiveTab();
+              // Nach Login: zum richtigen Bereich.
+              //   Master → Master-Admin (Turniere/Schiris/Reports)
+              //   Trainer → wenn auf /t/<slug>, dort weiter; sonst zurück zur Landing
+              if (activeTab === 'master') {
+                window.openMasterAdmin();
+              } else if (window.CURRENT_SLUG && typeof window.renderActiveTab === 'function') {
+                window.renderActiveTab();
+              } else {
+                window.renderLanding();
+              }
             } catch (e) {
               window.state.adminPassword = null;
               toast('Login fehlgeschlagen', 'error');
@@ -853,6 +862,10 @@
   // unerwartet, und wenn die Routing-Logik hier scheitert, hat man wenigstens
   // die alte UI als Fallback.
 
+  function showBody() {
+    document.body.style.visibility = 'visible';
+  }
+
   function bootstrapRoute() {
     const pathname = window.location.pathname;
 
@@ -864,12 +877,19 @@
       window.state.refereeAuth = code;
       // URL aufräumen und Profil öffnen
       window.history.replaceState({}, '', '/');
+      // Body leeren, dann Landing + Profil
+      document.body.innerHTML = '';
+      showBody();
+      window.renderLanding();
       window.openMyProfile();
       return;
     }
 
     // /admin — Login-Modal sofort
     if (pathname === '/admin') {
+      // Body leeren, damit nicht die alte DC2026-UI durchscheint
+      document.body.innerHTML = '';
+      showBody();
       // Schon eingeloggt? Dann Master-Admin direkt zeigen.
       if (window.state.role === 'master') window.openMasterAdmin();
       else window.openLogin();
@@ -878,11 +898,16 @@
 
     // / — Landing-Page
     if (pathname === '/') {
+      showBody();
       window.renderLanding();
       return;
     }
 
-    // /t/<slug> — app.js rendert die Tournament-View, nichts weiter zu tun
+    // /t/<slug> — app.js rendert die Tournament-View. Sichtbarkeit wird in app.js
+    // beim ersten erfolgreichen Render gesetzt (siehe dort: showAppBody()).
+    // Falls app.js aus irgendeinem Grund nicht startet (z.B. kein Slug erkannt),
+    // sichtbar machen als Fallback:
+    setTimeout(showBody, 300);
   }
 
   if (document.readyState === 'loading') {
