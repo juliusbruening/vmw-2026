@@ -158,15 +158,35 @@ export function parseMatchList(html, day) {
 
 function compactDivision(s = '') {
   // "Men 1st class Men 1st class Men 1st class" → "Men 1st class"
-  // (kommt nur vor wenn HTML-Renderer mehrere responsive-spans zusammenfasst)
+  // "Free Free Free" → "Free"
+  // (kommt vor wenn der HTML-Renderer responsive-spans zusammenfasst)
   const t = s.trim();
   if (!t) return t;
+
+  // Bekannte Divisions bevorzugt (deutsche + englische)
   for (const candidate of [
     'Pupils U14', 'Youth U16', 'Men U21', 'Women',
     'Men 1st class', 'Men 2nd class',
+    'Damen', 'Herren', 'Junioren', 'Jugend', 'Schüler',
   ]) {
     if (t.startsWith(candidate)) return candidate;
   }
+
+  // Generell: erkenne 2-3fach wiederholte Wortgruppen (1-3 Wörter Länge)
+  // "Foo Foo Foo" → "Foo"; "Free Cup Free Cup" → "Free Cup"
+  for (const groupSize of [1, 2, 3, 4]) {
+    const words = t.split(/\s+/);
+    if (words.length < groupSize * 2) continue;
+    const first = words.slice(0, groupSize).join(' ');
+    const repeats = Math.floor(words.length / groupSize);
+    let allMatch = true;
+    for (let i = 1; i < repeats; i++) {
+      const slice = words.slice(i * groupSize, (i + 1) * groupSize).join(' ');
+      if (slice !== first) { allMatch = false; break; }
+    }
+    if (allMatch && repeats >= 2) return first;
+  }
+
   return t.split(/\s{2,}|\t/)[0] || t;
 }
 

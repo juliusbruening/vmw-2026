@@ -30,6 +30,22 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Für externe Turniere: Status nach config.dates ableiten.
+ *   heute < dates[0]              → active (zukünftig, aber sichtbar)
+ *   dates[0] ≤ heute ≤ dates[last]→ active
+ *   heute > dates[last] + 1 Tag   → completed
+ * Wenn keine dates: bleibt was es ist.
+ */
+function computeExternalStatus(tConfig, today) {
+  if (['archived','draft'].includes(tConfig.status)) return tConfig.status;
+  const dates = tConfig.dates || [];
+  if (!dates.length) return tConfig.status;
+  const last = dates[dates.length - 1];
+  if (today > addDays(last, 1)) return 'completed';
+  return 'active';
+}
+
 function isWithinTournamentWindow(tConfig, today) {
   if (!Array.isArray(tConfig.dates) || tConfig.dates.length === 0) return false;
   const first = tConfig.dates[0];
@@ -93,9 +109,16 @@ export default async (req, ctx) => {
   const results = [];
 
   for (const tConfig of tournaments) {
-    // ─── external → niemals scrapen, nur in der Übersicht verlinkt ────
+    // ─── external → nicht scrapen, aber Status nach Datum automatisch updaten ─
     if (tConfig.type === 'external') {
-      results.push({ slug: tConfig.slug, skipped: 'external' });
+      const newStatus = computeExternalStatus(tConfig, today);
+      if (newStatus && newStatus !== tConfig.status) {
+        await updateTournament(tConfig.slug, { status: newStatus });
+        results.push({ slug: tConfig.slug, transitioned: `external → ${newStatus}` });
+        console.log(`[scrape] ${tConfig.slug} external status ${tConfig.status} → ${newStatus}`);
+      } else {
+        results.push({ slug: tConfig.slug, skipped: 'external' });
+      }
       continue;
     }
     // ─── completed/archived/draft → skip ───────────────────────────────

@@ -116,17 +116,18 @@
   // LOGIN-MODAL mit 3 Tabs (Trainer / Master / Schiri)
   // ═══════════════════════════════════════════════════════════════════
   window.openLogin = function() {
-    let activeTab = 'trainer';
+    // Landing-Page-Login: nur Master + Schiri. Trainer wird im Tournament-View aufgerufen.
+    let activeTab = 'master';
     const tabBar = h('div', { class: 'p3-tabbar' });
     const body = h('div', { class: 'p3-body' });
 
     function render() {
       tabBar.innerHTML = '';
-      ['trainer', 'master', 'schiri'].forEach(t => {
+      ['master', 'schiri'].forEach(t => {
         const btn = h('button', {
           class: 'p3-tab ' + (activeTab === t ? 'active' : ''),
           onclick: () => { activeTab = t; render(); },
-        }, t === 'trainer' ? 'Trainer' : t === 'master' ? 'Master' : 'Schiri');
+        }, t === 'master' ? 'Master' : 'Schiri');
         tabBar.appendChild(btn);
       });
 
@@ -229,7 +230,62 @@
       localStorage.removeItem('vmw.adminPwd');
     }
     toast('Ausgeloggt', 'info');
-    if (typeof window.renderActiveTab === 'function') window.renderActiveTab();
+    // Nach Logout immer zurück zur Landing-Page
+    window.location.href = '/';
+  };
+
+  // Trainer-Login als separates Modal — nur im Tournament-View aufgerufen
+  window.openTrainerLogin = function() {
+    if (window.state.role === 'trainer') {
+      // Bereits eingeloggt — Confirm-Dialog für Logout
+      if (confirm('Bereits als Trainer eingeloggt. Ausloggen?')) window.logout();
+      return;
+    }
+    const usernameInput = h('input', {
+      type: 'text', name: 'username', autocomplete: 'username',
+      value: 'trainer@vmw-berlin', style: 'display:none', readonly: 'readonly',
+    });
+    const input = h('input', {
+      type: 'password', placeholder: '••••••••', class: 'p3-input',
+      autocomplete: 'current-password', name: 'password',
+    });
+    const btn = h('button', { class: 'p3-btn primary', type: 'submit' }, 'Login');
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
+    setTimeout(() => input.focus(), 50);
+    btn.onclick = () => withLoading(btn, 'Prüfe …', async () => {
+      try {
+        window.state.adminPassword = input.value;
+        const slug = window.CURRENT_SLUG || 'dc2026';
+        await api(`/api/admin/login?slug=${encodeURIComponent(slug)}`, { method: 'POST', body: '{}' });
+        window.state.role = 'trainer';
+        localStorage.setItem('vmw.adminPwd', input.value);
+        localStorage.setItem('vmw.role', 'trainer');
+        toast('Eingeloggt als Trainer', 'success');
+        closeModal();
+        if (typeof window.renderActiveTab === 'function') window.renderActiveTab();
+      } catch (e) {
+        window.state.adminPassword = null;
+        toast('Login fehlgeschlagen', 'error');
+      }
+    });
+    const form = h('form', {
+      autocomplete: 'on',
+      onsubmit: (e) => { e.preventDefault(); btn.click(); },
+    },
+      h('label', {}, 'Trainer-Passwort'),
+      usernameInput, input, btn,
+    );
+    const modal = h('div', { class: 'p3-modal-content' },
+      h('div', { class: 'p3-modal-h' },
+        h('h3', {}, 'Trainer-Login'),
+        h('button', { class: 'p3-close', onclick: closeModal }, '×')),
+      h('div', { class: 'p3-body' },
+        h('div', { class: 'p3-hint', style: 'margin-bottom:12px' },
+          'Login um Schiri-Einteilungen für dieses Turnier vorzunehmen.'),
+        form,
+      ),
+    );
+    openModal(modal);
   };
 
   // ═══════════════════════════════════════════════════════════════════
@@ -647,7 +703,7 @@
 
     async function render() {
       tabBar.innerHTML = '';
-      for (const t of [['tournaments','Turniere'], ['referees','Schiris'], ['reports','Reports']]) {
+      for (const t of [['tournaments','Turniere'], ['einteilungen','Einteilungen'], ['referees','Schiris'], ['reports','Reports']]) {
         const btn = h('button', {
           class: 'p3-tab ' + (activeTab === t[0] ? 'active' : ''),
           onclick: () => { activeTab = t[0]; render(); },
@@ -655,6 +711,38 @@
         tabBar.appendChild(btn);
       }
       body.innerHTML = '';
+      body.appendChild(h('div', { class: 'p3-hint', style: 'padding:8px' }, '🔄 Lade …'));
+
+      try {
+        await renderActiveTab();
+      } catch (e) {
+        body.innerHTML = '';
+        body.appendChild(h('div', { class: 'p3-banner error' },
+          'Fehler beim Laden: ' + (e.message || 'unbekannt')));
+        body.appendChild(h('button', { class: 'p3-btn', onclick: render }, '↻ Erneut versuchen'));
+      }
+    }
+
+    async function renderActiveTab() {
+      body.innerHTML = '';
+
+      if (activeTab === 'einteilungen') {
+        // Tournament-Auswahl → dann Spielliste mit Picker-Buttons
+        const result = await api('/api/admin/tournaments');
+        const tournaments = (result.tournaments || []).filter(t => t.type !== 'external');
+        body.appendChild(h('div', { class: 'p3-section-title' }, 'Schiri-Einteilung nach Turnier'));
+        if (!tournaments.length) {
+          body.appendChild(h('div', { class: 'p3-hint' }, 'Noch keine Turniere angelegt.'));
+          return;
+        }
+        tournaments.forEach(t => {
+          body.appendChild(h('div', { class: 'p3-conn-card', onclick: () => openTournamentAssignments(t) },
+            h('strong', {}, t.name),
+            h('div', { class: 'p3-hint' }, `${t.status} · ${(t.dates || []).length} Tage`),
+          ));
+        });
+        return;
+      }
 
       if (activeTab === 'tournaments') {
         const result = await api('/api/admin/tournaments');
@@ -828,6 +916,102 @@
       await api(`/api/admin/referees/${id}`, { method: 'DELETE' }); render();
     }
 
+    async function openTournamentAssignments(tournament) {
+      // Lädt Snapshot + Assignments + Referees, zeigt alle Spiele mit Jury-Team-Match
+      // egal welchen Status — Master kann auch beendete Turniere nachpflegen.
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'p3-hint' }, '🔄 Lade Snapshot …'));
+
+      const ROLES = [
+        { code: 'ref1', short: '1.SR' }, { code: 'ref2', short: '2.SR' },
+        { code: 'scorer', short: 'Prot' }, { code: 'timer', short: 'Zeit' },
+        { code: 'shotclock', short: 'Shot' },
+        { code: 'line1', short: 'Lin1' }, { code: 'line2', short: 'Lin2' },
+      ];
+
+      try {
+        const data = await fetch(`/api/data?slug=${encodeURIComponent(tournament.slug)}`).then(r => r.json());
+        const snapshot = data.snapshot;
+        const assignments = data.assignments || {};
+        const referees = data.referees || [];
+
+        if (!snapshot?.matches) {
+          body.innerHTML = '';
+          body.appendChild(h('div', { class: 'p3-banner warning' },
+            'Kein Snapshot vorhanden — Turnier hat noch keinen Spielplan.'));
+          body.appendChild(h('button', { class: 'p3-btn', onclick: () => { activeTab = 'einteilungen'; render(); } }, '← Zurück'));
+          return;
+        }
+
+        // window.state für Picker setzen
+        window.state.snapshot = snapshot;
+        window.state.assignments = assignments;
+        window.state.referees = referees;
+        window.CURRENT_SLUG = tournament.slug;
+
+        // Nur Spiele wo eines unserer Teams Schiri ist (analog zu Trainer-Admin)
+        const ourMatches = snapshot.matches.filter(m => m.ourReferee).sort((a,b) => {
+          // erst nach Tag, dann nach Zeit
+          const dayDiff = (a.day || 0) - (b.day || 0);
+          if (dayDiff !== 0) return dayDiff;
+          return (a.time || '').localeCompare(b.time || '');
+        });
+
+        body.innerHTML = '';
+        body.appendChild(h('div', { class: 'p3-section-title' },
+          h('button', { class: 'p3-btn small', onclick: () => { activeTab = 'einteilungen'; render(); } }, '← Zurück'),
+          ' ' + tournament.name + ` · ${ourMatches.length} Jury-Einsätze`));
+
+        if (!ourMatches.length) {
+          body.appendChild(h('div', { class: 'p3-hint' }, 'Keine VMW-Schiri-Einsätze in diesem Turnier.'));
+          return;
+        }
+
+        const refsById = new Map(referees.map(r => [r.id, r]));
+
+        // Gruppieren in: Offen (next/live ohne komplette Einteilung), Beendet
+        const grouped = { offen: [], live: [], done: [] };
+        ourMatches.forEach(m => {
+          if (m.status === 'done') grouped.done.push(m);
+          else if (m.status === 'live') grouped.live.push(m);
+          else grouped.offen.push(m);
+        });
+
+        function renderMatchCard(m) {
+          const ass = assignments[m.nr]?.roles || {};
+          const card = h('div', { class: 'p3-conn-card', style: 'cursor:default' });
+          card.appendChild(h('strong', {}, `#${m.nr} · ${m.teamA?.name} vs ${m.teamB?.name}`));
+          card.appendChild(h('div', { class: 'p3-hint' },
+            `${m.time || ''} · ${m.division || ''} · ${m.status === 'done' ? 'beendet' : m.status}`));
+          const pillRow = h('div', { class: 'p3-pillrow', style: 'margin-top:8px; flex-wrap: wrap' });
+          ROLES.forEach(role => {
+            const refId = ass[role.code];
+            const refName = refId && refsById.get(refId)
+              ? refsById.get(refId).displayName || refsById.get(refId).firstName
+              : '—';
+            const pill = h('button', {
+              class: 'p3-pillchoice' + (refId ? ' active' : ''),
+              style: 'cursor:pointer',
+              onclick: () => window.openRolePicker(m.nr, role.code),
+            }, `${role.short}: ${refName}`);
+            pillRow.appendChild(pill);
+          });
+          card.appendChild(pillRow);
+          return card;
+        }
+
+        for (const [key, label] of [['offen', '⏭ Offen / Live'], ['done', '✅ Beendet']]) {
+          if (key === 'offen') grouped.offen.push(...grouped.live);
+          if (!grouped[key].length) continue;
+          body.appendChild(h('div', { class: 'p3-section-title' }, label));
+          grouped[key].forEach(m => body.appendChild(renderMatchCard(m)));
+        }
+      } catch (e) {
+        body.innerHTML = '';
+        body.appendChild(h('div', { class: 'p3-banner error' }, 'Fehler: ' + e.message));
+      }
+    }
+
     // Page-Layout (kein Modal — bleibt persistent, kein Klick-außerhalb-schließt)
     document.body.innerHTML = '';
     document.body.style.visibility = 'visible';
@@ -908,8 +1092,9 @@
     // ─── Schritt 0: Connector-Auswahl ────────────────────────────────
     function renderStep0() {
       resultBox.innerHTML = '';
-      resultBox.appendChild(h('div', { class: 'p3-section-title' }, 'Quelle wählen'));
 
+      // (1) Echte Connectoren mit Discovery
+      resultBox.appendChild(h('div', { class: 'p3-section-title' }, '🔌 Mit Connector (automatisch)'));
       KNOWN_CONNECTORS.forEach(c => {
         const card = h('div', {
           class: 'p3-conn-card',
@@ -920,19 +1105,152 @@
         },
           h('strong', {}, c.label),
           h('div', { class: 'p3-hint' },
-            c.supportsListing ? 'Aktuelle Turniere automatisch laden' : 'URL manuell eingeben'),
+            c.supportsListing ? 'Aktuelle Turniere automatisch laden, Spielplan wird gespiegelt' : 'URL manuell eingeben'),
         );
         resultBox.appendChild(card);
       });
 
-      resultBox.appendChild(h('div', { class: 'p3-section-title', style: 'margin-top:20px' }, 'Oder direkt URL eingeben'));
-      const urlInput = h('input', { type: 'text', class: 'p3-input', placeholder: 'https://cpt.kayakers.nl/View/…' });
-      const btn = h('button', { class: 'p3-btn primary' }, 'Analysieren');
-      urlInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
-      btn.onclick = () => analyze(btn, urlInput.value.trim());
-      resultBox.appendChild(h('div', { class: 'p3-field' }, urlInput));
-      resultBox.appendChild(btn);
-      setTimeout(() => urlInput.focus(), 50);
+      // (2) Externes Turnier ohne Connector — verlinkt nur auf andere Seite
+      resultBox.appendChild(h('div', { class: 'p3-section-title', style: 'margin-top:24px' }, '↗ Ohne Connector (nur Verlinkung)'));
+      const extCard = h('div', {
+        class: 'p3-conn-card p3-conn-card-ext',
+        onclick: () => renderExternalForm(),
+      },
+        h('strong', {}, 'Externes Turnier verlinken'),
+        h('div', { class: 'p3-hint' },
+          'Für Turniere bei Anbietern ohne Connector (eigene Vereins-App, Toornament, Webseite …). Klick auf das Turnier öffnet die externe URL in neuem Tab. Status (aktiv/beendet) wird automatisch aus dem Datum bestimmt.'),
+      );
+      resultBox.appendChild(extCard);
+    }
+
+    // ─── Schritt 1b: Externes Turnier manuell anlegen ────────────────
+    function renderExternalForm() {
+      resultBox.innerHTML = '';
+      resultBox.appendChild(h('button', { class: 'p3-btn small', onclick: renderStep0 }, '← Zurück'));
+      resultBox.appendChild(h('div', { class: 'p3-section-title' }, '↗ Externes Turnier'));
+      resultBox.appendChild(h('div', { class: 'p3-hint', style: 'margin-bottom:12px' },
+        'Wird auf der Landing-Page mit ↗-Badge angezeigt. Klick → öffnet die externe URL. Schiri-Einsätze müssen manuell ergänzt werden (Self-Service).'));
+
+      const nameInput = h('input', { class: 'p3-input', placeholder: 'z.B. 1. Bundesliga Herren 2026' });
+      const slugInput = h('input', { class: 'p3-input', placeholder: 'auto aus Name' });
+      const datesInput = h('input', { class: 'p3-input', placeholder: '2026-05-23, 2026-05-24, …' });
+      const singleUrlInput = h('input', { class: 'p3-input', placeholder: 'https://…' });
+
+      // Auto-Slug aus Name
+      nameInput.oninput = () => {
+        if (!slugInput.dataset.touched) {
+          slugInput.value = nameInput.value.toLowerCase()
+            .replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss')
+            .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+        }
+      };
+      slugInput.oninput = () => { slugInput.dataset.touched = '1'; };
+
+      // Multi-Day-Toggle
+      const isMultiDayCb = h('input', { type: 'checkbox' });
+      const singleSection = h('div', { class: 'p3-field' }, h('label', {}, 'Externe URL'), singleUrlInput);
+      const multiSection = h('div', { style: 'display:none' });
+      const dayRows = [];
+      function addDayRow(initial = {}) {
+        const labelInput = h('input', { class: 'p3-input', placeholder: 'z.B. Spieltag 1 — Berlin', value: initial.label || '' });
+        const dateInput  = h('input', { class: 'p3-input', placeholder: '17.-18.05.2026', value: initial.date || '' });
+        const urlInput   = h('input', { class: 'p3-input', placeholder: 'https://…', value: initial.url || '' });
+        const removeBtn  = h('button', { class: 'p3-btn small danger', title: 'Entfernen', onclick: () => {
+          const idx = dayRows.findIndex(r => r.row === row);
+          if (idx >= 0) dayRows.splice(idx, 1);
+          row.remove();
+        }}, '×');
+        const row = h('div', { class: 'p3-multiday-row' },
+          h('div', { style: 'display:grid; grid-template-columns: 1fr 1fr 2fr auto; gap:6px; align-items:end' },
+            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Label'), labelInput),
+            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Datum'), dateInput),
+            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'URL'), urlInput),
+            removeBtn,
+          ),
+        );
+        dayRows.push({ labelInput, dateInput, urlInput, row });
+        multiSection.appendChild(row);
+      }
+      isMultiDayCb.onchange = () => {
+        const on = isMultiDayCb.checked;
+        singleSection.style.display = on ? 'none' : '';
+        multiSection.style.display = on ? '' : 'none';
+        if (on && dayRows.length === 0) addDayRow();
+      };
+
+      const addRowBtn = h('button', { class: 'p3-btn small', onclick: () => addDayRow() }, '+ Spieltag');
+
+      const saveBtn = h('button', { class: 'p3-btn primary' }, 'Speichern');
+      saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
+        const name = nameInput.value.trim();
+        const slug = slugInput.value.trim();
+        if (!name) return toast('Name fehlt', 'error');
+        if (!/^[a-z0-9-]{3,40}$/.test(slug)) return toast('Slug muss 3-40 Zeichen [a-z0-9-]+ sein', 'error');
+
+        const dates = datesInput.value.split(',').map(s => s.trim()).filter(Boolean);
+
+        const multiDay = isMultiDayCb.checked;
+        let externalDays = null;
+        let externalUrl = null;
+        if (multiDay) {
+          externalDays = dayRows
+            .filter(r => r.urlInput.value.trim())
+            .map(r => ({ date: r.dateInput.value.trim(), label: r.labelInput.value.trim(), url: r.urlInput.value.trim() }));
+          if (!externalDays.length) return toast('Mindestens ein Spieltag mit URL erforderlich', 'error');
+        } else {
+          externalUrl = singleUrlInput.value.trim();
+          if (!externalUrl) return toast('URL fehlt', 'error');
+          if (!/^https?:\/\//.test(externalUrl)) return toast('URL muss mit http:// oder https:// starten', 'error');
+        }
+
+        // Auto-Status nach Datum
+        const today = new Date().toISOString().slice(0, 10);
+        let status = 'active';
+        if (dates.length) {
+          if (today < dates[0]) status = 'active';                 // zukünftig — trotzdem als active anzeigen
+          else if (today > dates[dates.length - 1]) status = 'completed';
+        }
+
+        const config = {
+          slug, name, type: 'external',
+          connector: null, showStandings: false, showHausliga: false,
+          source: null, externalUrl, externalDays,
+          status, dates,
+          expectedDates: null, timezone: 'Europe/Berlin',
+          pendingTeamSelection: false, lastRediscoveryAt: null,
+          ourTeams: [],
+        };
+
+        try {
+          await api('/api/admin/tournaments', { method: 'POST', body: JSON.stringify({ config }) });
+          toast('Externes Turnier angelegt', 'success');
+          closeModal();
+          window.openMasterAdmin();
+        } catch (e) {
+          toast('Fehler: ' + e.message, 'error');
+        }
+      });
+
+      resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Name *'), nameInput));
+      resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Slug *'), slugInput,
+        h('div', { class: 'p3-hint' }, 'URL des Turniers: /t/<slug>')));
+      resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Tage (komma-getrennt YYYY-MM-DD)'), datesInput,
+        h('div', { class: 'p3-hint' }, 'Bestimmt automatisch ob das Turnier als "aktiv" oder "beendet" angezeigt wird.')));
+
+      resultBox.appendChild(h('div', { class: 'p3-field' },
+        h('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer' },
+          isMultiDayCb,
+          h('span', {}, 'Mehrere Spieltage mit jeweils eigenem Link'),
+        ),
+      ));
+
+      resultBox.appendChild(singleSection);
+      resultBox.appendChild(multiSection);
+      multiSection.appendChild(addRowBtn);
+
+      resultBox.appendChild(saveBtn);
+
+      setTimeout(() => nameInput.focus(), 50);
     }
 
     // ─── Schritt 1: Tournament-Liste aus Connector ───────────────────

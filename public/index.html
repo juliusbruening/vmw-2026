@@ -132,7 +132,7 @@
   </section>
 
   <footer class="app-footer">
-    <p>Daten von <a href="https://cpt.kayakers.nl/MatchList/DC2026?day=1" target="_blank" rel="noopener">cpt.kayakers.nl</a> · Aktualisierung an Turniertagen alle 15 Min</p>
+    <p>Daten von <a href="https://cpt.kayakers.nl/" target="_blank" rel="noopener" id="footerSourceLink">cpt.kayakers.nl</a> · Aktualisierung an Turniertagen alle 15 Min</p>
     <p>Inoffizielles Mirror — kein Ersatz für die offizielle Turnier-Seite. Erstellt für Familie, Freunde und die VMW Berlin.</p>
     <p>Gebaut von Julius Brüning · <a href="mailto:juliusbruening1994@gmail.com?subject=Ideen%20f%C3%BCr%20weitere%20Projekte">Ideen für weitere Projekte? Schreib mir.</a></p>
   </footer>
@@ -161,18 +161,22 @@
     <button class="close" onclick="closeModal('info')">×</button>
     <h3>Wann werden die Daten aktualisiert?</h3>
     <p style="margin:0 0 14px;color:var(--ink-2);font-size:14px;line-height:1.55">
-      Die Spielstände werden automatisch von <a href="https://cpt.kayakers.nl/MatchList/DC2026?day=1" target="_blank" rel="noopener" style="color:var(--vmw-red)">cpt.kayakers.nl</a> geholt:
+      Die Spielstände werden automatisch von der Quellseite (siehe Footer) geholt:
     </p>
     <div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:10px">
-      <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">Turnier-Wochenende (Fr 22. – Mo 25. Mai)</div>
-      <div style="font-size:13px;color:var(--ink-2)">alle 15 Minuten, zwischen 06:00 und 23:00 Uhr</div>
+      <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">An Turniertagen (laut Spielplan)</div>
+      <div style="font-size:13px;color:var(--ink-2)">alle 15 Minuten, zwischen 06:00 und 23:00 Uhr (Berlin-Zeit)</div>
+    </div>
+    <div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+      <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">Außerhalb der Turniertage</div>
+      <div style="font-size:13px;color:var(--ink-2)">kein automatischer Scrape — der Snapshot bleibt eingefroren auf dem letzten Stand</div>
     </div>
     <div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:14px">
-      <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">Andere Tage</div>
-      <div style="font-size:13px;color:var(--ink-2)">1× pro Tag, um 06:00 Uhr</div>
+      <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">Turniere mit ausstehendem Spielplan</div>
+      <div style="font-size:13px;color:var(--ink-2)">App prüft adaptiv 1× pro Woche (&gt;30 Tage zum Start), 1× pro Tag (7-30 Tage), 2× pro Tag (&lt;7 Tage), und schaltet automatisch um sobald der Plan da ist</div>
     </div>
     <p style="margin:0;color:var(--ink-3);font-size:12.5px;line-height:1.55">
-      Der Zeitstempel oben zeigt, <strong style="color:var(--ink-2)">wann die letzten Daten von kayakers.nl geholt wurden</strong>. Wenn er länger als 20 Min still steht, hat die Quellseite gerade keine Updates — nicht die App.
+      Der Zeitstempel oben zeigt, <strong style="color:var(--ink-2)">wann die letzten Daten geholt wurden</strong>. Wenn er länger still steht und kein Turnier läuft, ist das normal — der Scraper schläft.
     </p>
   </div>
 </div>

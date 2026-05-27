@@ -266,9 +266,10 @@ async function handleCreateTournament(req) {
     slug: config.slug,
     name: config.name,
     type: config.type || 'tournament',
-    connector: config.connector,
+    connector: config.connector || null,
     showStandings: !!config.showStandings,
-    source: config.source || {},
+    showHausliga: !!config.showHausliga,
+    source: config.source || null,
     status: config.status || 'draft',
     dates: config.dates || [],
     expectedDates: config.expectedDates || null,
@@ -276,6 +277,9 @@ async function handleCreateTournament(req) {
     pendingTeamSelection: false,
     lastRediscoveryAt: null,
     ourTeams: config.ourTeams || [],
+    // Felder für externe Turniere (type === 'external')
+    externalUrl: config.externalUrl || null,
+    externalDays: Array.isArray(config.externalDays) ? config.externalDays : null,
     createdAt: now,
     updatedAt: now,
   };

@@ -137,15 +137,25 @@ export const kayakersConnector = {
 
     // Alle Tage durchgehen — die Date-Header in der Page geben das Datum her
     const proposedDates = [];
+    const seenDates = new Set();
     const allTeams = new Map();
+    let lastFirstMatchNr = null;
     for (let day = 1; day <= 14; day++) {
       const url = vid ? `${matchListUrl}?day=${day}&vid=${vid}` : `${matchListUrl}?day=${day}`;
       const html = day === 1 ? day1Html : await fetcher(url).catch(() => null);
       if (!html) break;
       const matches = parseMatchList(html, day);
       if (!matches.length) break;
+      // Wenn kayakers für ungültige Tage einfach Tag 1 zurückgibt: abbrechen sobald
+      // die erste Match-Nr identisch zur vorherigen ist.
+      const firstNr = matches[0]?.nr ?? null;
+      if (day > 1 && firstNr === lastFirstMatchNr) break;
+      lastFirstMatchNr = firstNr;
       const date = parseFirstDateFromHtml(html);
-      if (date) proposedDates.push(date);
+      if (date && !seenDates.has(date)) {
+        proposedDates.push(date);
+        seenDates.add(date);
+      }
       for (const m of matches) {
         if (m.teamA?.tid && !allTeams.has(m.teamA.tid)) {
           allTeams.set(m.teamA.tid, { name: m.teamA.name, division: m.division });
@@ -155,6 +165,7 @@ export const kayakersConnector = {
         }
       }
     }
+    proposedDates.sort();
 
     return {
       hasSchedule: true,

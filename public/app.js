@@ -100,8 +100,32 @@ function applyHeaderTitle(uiConfig){
   if (!titleEl) return;
   const dateRange = formatDateRange(uiConfig.dates || []);
   titleEl.innerHTML = `VMW Berlin<small>${escapeHtml(uiConfig.name || '')}${dateRange ? ' · ' + dateRange : ''}</small>`;
-  // Tab-Title auch updaten
   document.title = uiConfig.name ? `${uiConfig.name} · VMW` : 'VMW Live-App';
+
+  // Zurück-Button + Trainer-Login-Icon im Header injizieren falls noch nicht da
+  const headerInner = document.querySelector('header.app .inner');
+  if (headerInner && !headerInner.querySelector('.back-btn')) {
+    const back = document.createElement('button');
+    back.className = 'back-btn';
+    back.title = 'Zurück zur Übersicht';
+    back.innerHTML = '←';
+    back.style.cssText = 'background:transparent;border:none;color:white;font-size:22px;padding:0 10px;cursor:pointer;margin-right:6px';
+    back.onclick = () => { window.location.href = '/'; };
+    headerInner.insertBefore(back, headerInner.firstChild);
+  }
+  // Altes Zahnrad-Icon umbinden auf Trainer-Login (nur im Turnier-Kontext)
+  const menuBtn = document.querySelector('header.app .menu');
+  if (menuBtn) {
+    menuBtn.title = 'Trainer-Login';
+    menuBtn.onclick = (e) => {
+      e.preventDefault();
+      if (typeof window.openTrainerLogin === 'function') {
+        window.openTrainerLogin();
+      } else if (typeof window.openLogin === 'function') {
+        window.openLogin();
+      }
+    };
+  }
 }
 
 function formatDateRange(dates){
@@ -170,7 +194,6 @@ function applyFooterLink(uiConfig){
 }
 
 function applyHausligaVisibility(uiConfig){
-  // Default: zeigen wenn explizit aktiv ODER wenn DC2026 (Backwards-Compat).
   const show = uiConfig.showHausliga === true;
   const hausTab = document.querySelector('.tabbar button[data-tab="haus"]');
   const hausPanel = document.getElementById('panel-haus');
@@ -179,6 +202,12 @@ function applyHausligaVisibility(uiConfig){
   if (!show && state.tab === 'haus') {
     state.tab = 'live';
     save('tab', 'live');
+  }
+  // Tabbar-Layout: bei 3 statt 4 Tabs gleichmäßig verteilen
+  const inner = document.querySelector('nav.tabbar .inner');
+  if (inner) {
+    const visibleTabs = inner.querySelectorAll('button:not([style*="display: none"])').length || 3;
+    inner.style.gridTemplateColumns = `repeat(${visibleTabs}, 1fr)`;
   }
 }
 
@@ -245,12 +274,29 @@ function applyTeamPills(uiConfig){
       btn.textContent = t.pillLabel || t.code;
       el.appendChild(btn);
     });
-    // active-State setzen
-    const stateKey = containerId === 'planTeamPills' ? state.planFilter
-                   : containerId === 'teamPills'     ? state.teamView
-                   :                                    state.scorerFilt;
+
+    // active-State + Click-Handler — pro Container die richtige Render-Funktion + State-Key
+    const stateKey = containerId === 'planTeamPills' ? 'planFilter'
+                   : containerId === 'teamPills'     ? 'teamView'
+                   :                                    'scorerFilt';
+    const storageKey = containerId === 'planTeamPills' ? 'spielplanFilter'
+                     : containerId === 'teamPills'     ? 'teamsView'
+                     :                                    'scorersFilter';
+    const renderFn = containerId === 'planTeamPills' ? renderPlan
+                   : containerId === 'teamPills'     ? renderTeams
+                   :                                    renderHausliga;
+
     el.querySelectorAll('button').forEach(b => {
-      if (b.dataset.team === stateKey) b.classList.add('active');
+      if (b.dataset.team === state[stateKey]) b.classList.add('active');
+      b.addEventListener('click', () => {
+        state[stateKey] = b.dataset.team;
+        save(storageKey, b.dataset.team);
+        // teamView (Teams-Tab) hat keinen "all"-Modus — falls null/all, ersten Code nehmen
+        if (containerId === 'teamPills' && b.dataset.team === 'all' && teams[0]) {
+          state.teamView = teams[0].code;
+        }
+        renderFn();
+      });
     });
   }
 }
