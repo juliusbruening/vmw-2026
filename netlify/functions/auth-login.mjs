@@ -30,11 +30,16 @@ export default async (req) => {
   }
 
   let body; try { body = await req.json(); } catch { body = null; }
-  const code = (body?.code || '').trim();
+  // Normalisieren: trim, alle Whitespace-Varianten (auch unsichtbare nbsp etc.) raus.
+  const code = (body?.code || '').replace(/\s+/g, '').toUpperCase();
   if (!code) return j({ ok: false, error: 'code required' }, 400);
 
   const referees = await listReferees({ activeOnly: true, includeSecret: true });
-  const found = referees.find(r => (r.loginCode || '').toLowerCase() === code.toLowerCase());
+  // Logging: hilft beim Debug im Netlify-Function-Log
+  const codesInPool = referees.map(r => (r.loginCode || '').replace(/\s+/g, '').toUpperCase());
+  console.log(`[auth-login] tryCode="${code}" pool=${referees.length} codes=[${codesInPool.filter(Boolean).join(',')}]`);
+
+  const found = referees.find(r => (r.loginCode || '').replace(/\s+/g, '').toUpperCase() === code);
 
   if (!found) {
     // Rate-Counter aktualisieren

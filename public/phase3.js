@@ -80,6 +80,22 @@
     setTimeout(() => el.remove(), 3000);
   }
 
+  // ─── Button-Loading-Wrapper ───────────────────────────────────────
+  // Setzt den Button auf "lädt …", disabled ihn, und stellt nach der Action
+  // den Originalzustand wieder her. Verhindert Doppel-Klicks.
+  async function withLoading(button, label, action) {
+    const original = button.innerHTML;
+    const wasDisabled = button.disabled;
+    button.disabled = true;
+    button.innerHTML = '<span class="p3-spinner"></span> ' + (label || 'lädt …');
+    try {
+      await action();
+    } finally {
+      button.disabled = wasDisabled;
+      button.innerHTML = original;
+    }
+  }
+
   // ─── API-Helpers ────────────────────────────────────────────────────
   async function api(path, opts={}) {
     const headers = { 'content-type': 'application/json', ...(opts.headers || {}) };
@@ -117,58 +133,58 @@
       body.innerHTML = '';
       if (activeTab === 'trainer' || activeTab === 'master') {
         const input = h('input', { type: 'password', placeholder: '••••••••', class: 'p3-input' });
-        const btn = h('button', {
-          class: 'p3-btn primary',
-          onclick: async () => {
-            try {
-              window.state.adminPassword = input.value;
-              await api(`/api/admin/login?slug=${encodeURIComponent(CURRENT_SLUG)}`, { method: 'POST', body: '{}' });
-              window.state.role = activeTab;
-              localStorage.setItem('vmw.adminPwd', input.value);
-              localStorage.setItem('vmw.role', activeTab);
-              toast(`Eingeloggt als ${activeTab}`, 'success');
-              closeModal();
-              // Nach Login: zum richtigen Bereich.
-              //   Master → Master-Admin (Turniere/Schiris/Reports)
-              //   Trainer → wenn auf /t/<slug>, dort weiter; sonst zurück zur Landing
-              if (activeTab === 'master') {
-                window.openMasterAdmin();
-              } else if (window.CURRENT_SLUG && typeof window.renderActiveTab === 'function') {
-                window.renderActiveTab();
-              } else {
-                window.renderLanding();
-              }
-            } catch (e) {
-              window.state.adminPassword = null;
-              toast('Login fehlgeschlagen', 'error');
+        const btn = h('button', { class: 'p3-btn primary' }, 'Login');
+        // Enter im Input löst den Button aus
+        input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
+        // Auto-Fokus nach Render
+        setTimeout(() => input.focus(), 50);
+        btn.onclick = () => withLoading(btn, 'Prüfe …', async () => {
+          try {
+            window.state.adminPassword = input.value;
+            await api(`/api/admin/login?slug=${encodeURIComponent(window.CURRENT_SLUG || 'dc2026')}`, { method: 'POST', body: '{}' });
+            window.state.role = activeTab;
+            localStorage.setItem('vmw.adminPwd', input.value);
+            localStorage.setItem('vmw.role', activeTab);
+            toast(`Eingeloggt als ${activeTab}`, 'success');
+            closeModal();
+            if (activeTab === 'master') {
+              window.openMasterAdmin();
+            } else if (window.CURRENT_SLUG && typeof window.renderActiveTab === 'function') {
+              window.renderActiveTab();
+            } else {
+              window.renderLanding();
             }
-          },
-        }, 'Login');
+          } catch (e) {
+            window.state.adminPassword = null;
+            toast('Login fehlgeschlagen', 'error');
+          }
+        });
         body.appendChild(h('label', {}, 'Passwort'));
         body.appendChild(input);
         body.appendChild(btn);
       } else {
         const input = h('input', { type: 'text', placeholder: 'VMW-XXXX', class: 'p3-input', style: 'text-transform:uppercase' });
-        const btn = h('button', {
-          class: 'p3-btn primary',
-          onclick: async () => {
-            try {
-              const result = await fetch('/api/auth/referee-login', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ code: input.value.trim() }),
-              }).then(r => r.json());
-              if (!result.ok) { toast(result.error === 'rate_limited' ? 'Zu viele Versuche — bitte später' : 'Code ungültig', 'error'); return; }
-              window.state.refereeAuth = input.value.trim();
-              localStorage.setItem('refereeAuth', input.value.trim());
-              toast(`Willkommen ${result.referee.displayName}`, 'success');
-              closeModal();
-              window.openMyProfile();
-            } catch (e) {
-              toast('Login fehlgeschlagen', 'error');
-            }
-          },
-        }, 'Einloggen');
+        const btn = h('button', { class: 'p3-btn primary' }, 'Einloggen');
+        input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
+        setTimeout(() => input.focus(), 50);
+        btn.onclick = () => withLoading(btn, 'Prüfe …', async () => {
+          try {
+            const result = await fetch('/api/auth/referee-login', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ code: input.value.replace(/\s+/g, '').toUpperCase() }),
+            }).then(r => r.json());
+            if (!result.ok) { toast(result.error === 'rate_limited' ? 'Zu viele Versuche — bitte später' : 'Code ungültig', 'error'); return; }
+            const normalizedCode = input.value.replace(/\s+/g, '').toUpperCase();
+            window.state.refereeAuth = normalizedCode;
+            localStorage.setItem('refereeAuth', normalizedCode);
+            toast(`Willkommen ${result.referee.displayName}`, 'success');
+            closeModal();
+            window.openMyProfile();
+          } catch (e) {
+            toast('Login fehlgeschlagen', 'error');
+          }
+        });
         body.appendChild(h('label', {}, 'Schiri-Login-Code'));
         body.appendChild(input);
         body.appendChild(h('div', { class: 'p3-hint' }, 'Code vom Schiri-Verantwortlichen.'));
@@ -515,6 +531,8 @@
   // ═══════════════════════════════════════════════════════════════════
   window.openMasterAdmin = async function() {
     if (window.state.role !== 'master') { openLogin(); return; }
+    // Schließe alle offenen Modals und übernimm die ganze Seite
+    closeModal();
     let activeTab = 'tournaments';
 
     const tabBar = h('div', { class: 'p3-tabbar' });
@@ -538,13 +556,26 @@
           onclick: () => openTournamentWizard(),
         }, '+ Neues Turnier'));
         result.tournaments.forEach(t => {
+          const scrapeBtn = h('button', { class: 'p3-btn small' }, '🔄 Scrape');
+          scrapeBtn.onclick = () => withLoading(scrapeBtn, 'Scrape …', () => quickScrape(t.slug));
+
+          const deleteBtn = h('button', { class: 'p3-btn small danger', title: 'Turnier löschen' }, '🗑');
+          deleteBtn.onclick = () => withLoading(deleteBtn, '', async () => {
+            if (!confirm(`Turnier "${t.name}" wirklich löschen?\nSnapshot + alle Einteilungen werden ebenfalls entfernt.`)) return;
+            try {
+              await api(`/api/admin/tournaments/${t.slug}`, { method: 'DELETE' });
+              toast('Turnier gelöscht', 'success');
+              render();
+            } catch (e) { toast('Löschen fehlgeschlagen: ' + e.message, 'error'); }
+          });
+
           body.appendChild(h('div', { class: 'p3-admin-row' },
             h('div', {},
               h('strong', {}, t.name),
-              h('div', { class: 'p3-hint' }, `${t.status} · ${t.connector} · ${(t.dates || []).length} Tage`)
+              h('div', { class: 'p3-hint' }, `${t.status} · ${t.connector || (t.type === 'external' ? 'extern' : '—')} · ${(t.dates || []).length} Tage · ${t.slug}`)
             ),
             h('div', { class: 'p3-row-actions' },
-              h('button', { class: 'p3-btn small', onclick: () => quickScrape(t.slug) }, '🔄 Scrape'),
+              t.type === 'external' ? null : scrapeBtn,
               h('select', {
                 class: 'p3-input small',
                 onchange: async (e) => {
@@ -555,6 +586,7 @@
                 ...['draft','awaiting-schedule','active','completed','archived'].map(s =>
                   h('option', { value: s, selected: s === t.status }, s))
               ),
+              deleteBtn,
             ),
           ));
         });
@@ -567,6 +599,46 @@
           onclick: () => openRefereeForm(),
         }, '+ Neuer Schiri'));
         result.referees.forEach(r => {
+          const actions = [];
+
+          // Edit-Button (immer verfügbar)
+          actions.push(h('button', { class: 'p3-btn small', onclick: () => openRefereeForm(r) }, 'Edit'));
+
+          if (r.active !== false) {
+            // Aktiver Schiri: Code generieren + Soft-Delete (Deaktivieren)
+            const codeBtn = h('button', { class: 'p3-btn small' }, '🔑 Code');
+            codeBtn.onclick = () => withLoading(codeBtn, 'Generiere …', () => generateCode(r.id));
+            actions.push(codeBtn);
+
+            const deactivateBtn = h('button', { class: 'p3-btn small danger', title: 'Deaktivieren (Soft-Delete)' }, '🚫');
+            deactivateBtn.onclick = () => withLoading(deactivateBtn, '', async () => {
+              if (!confirm(`"${r.displayName}" deaktivieren?\nHistorische Einsätze bleiben in den Reports erhalten.`)) return;
+              try { await api(`/api/admin/referees/${r.id}`, { method: 'DELETE' }); toast('Deaktiviert', 'success'); render(); }
+              catch (e) { toast('Fehler: ' + e.message, 'error'); }
+            });
+            actions.push(deactivateBtn);
+          } else {
+            // Inaktiver Schiri: Reaktivieren + Hard-Delete
+            const reactivateBtn = h('button', { class: 'p3-btn small' }, '🔄 Reaktivieren');
+            reactivateBtn.onclick = () => withLoading(reactivateBtn, '', async () => {
+              try {
+                await api(`/api/admin/referees/${r.id}`, { method: 'PUT', body: JSON.stringify({ active: true }) });
+                toast('Reaktiviert', 'success'); render();
+              } catch (e) { toast('Fehler: ' + e.message, 'error'); }
+            });
+            actions.push(reactivateBtn);
+
+            const hardDeleteBtn = h('button', { class: 'p3-btn small danger', title: 'Endgültig löschen' }, '🗑 Endgültig');
+            hardDeleteBtn.onclick = () => withLoading(hardDeleteBtn, '', async () => {
+              if (!confirm(`"${r.displayName}" ENDGÜLTIG löschen?\n\n⚠ Stammdaten + manuelle Einträge werden komplett entfernt.\nHistorische Einsätze in Reports verlieren ihre Auflösung.\n\nDas kann nicht rückgängig gemacht werden.`)) return;
+              try {
+                await api(`/api/admin/referees/${r.id}?permanent=1`, { method: 'DELETE' });
+                toast('Endgültig gelöscht', 'success'); render();
+              } catch (e) { toast('Fehler: ' + e.message, 'error'); }
+            });
+            actions.push(hardDeleteBtn);
+          }
+
           body.appendChild(h('div', { class: 'p3-admin-row' },
             h('div', {},
               h('strong', {}, `${r.firstName} ${r.lastName}`),
@@ -574,13 +646,7 @@
               r.loginCode ? h('div', { class: 'p3-code' }, `Login-Code: ${r.loginCode}`) : null,
               r.active === false ? h('span', { class: 'p3-badge muted' }, 'inaktiv') : null,
             ),
-            h('div', { class: 'p3-row-actions' },
-              h('button', { class: 'p3-btn small', onclick: () => openRefereeForm(r) }, 'Edit'),
-              h('button', { class: 'p3-btn small', onclick: () => generateCode(r.id) }, '🔑 Code'),
-              r.active !== false
-                ? h('button', { class: 'p3-btn small danger', onclick: () => deactivate(r.id) }, '🚫')
-                : null,
-            ),
+            h('div', { class: 'p3-row-actions' }, ...actions),
           ));
         });
       }
@@ -620,22 +686,55 @@
     }
     async function generateCode(id) {
       const result = await api(`/api/admin/referees/${id}/login-code`, { method: 'POST' });
-      alert(`Login-Code: ${result.loginCode}\n\nKopieren und an den Schiri senden.`);
+      showCodeModal(result.loginCode);
       render();
+    }
+    function showCodeModal(code) {
+      const codeBox = h('div', { class: 'p3-code-display' }, code);
+      const copyBtn = h('button', { class: 'p3-btn primary' }, '📋 In Zwischenablage kopieren');
+      copyBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(code);
+          copyBtn.textContent = '✓ Kopiert';
+          setTimeout(() => { copyBtn.textContent = '📋 In Zwischenablage kopieren'; }, 2000);
+        } catch {
+          toast('Kopieren fehlgeschlagen — bitte manuell markieren', 'error');
+        }
+      };
+      const modal = h('div', { class: 'p3-modal-content' },
+        h('div', { class: 'p3-modal-h' },
+          h('h3', {}, 'Login-Code'),
+          h('button', { class: 'p3-close', onclick: closeModal }, '×')),
+        h('div', { class: 'p3-body' },
+          h('div', { class: 'p3-hint' }, 'Diesen Code an den Schiri weitergeben (z.B. per WhatsApp):'),
+          codeBox,
+          copyBtn,
+          h('div', { class: 'p3-hint', style: 'margin-top:12px' },
+            'Der Schiri loggt sich damit unter "Login → Schiri" ein. ' +
+            'Bei Verlust kannst du einen neuen Code generieren (der alte wird ungültig).'),
+        ),
+      );
+      openModal(modal);
     }
     async function deactivate(id) {
       if (!confirm('Schiri deaktivieren?')) return;
       await api(`/api/admin/referees/${id}`, { method: 'DELETE' }); render();
     }
 
-    const content = h('div', { class: 'p3-modal-content' },
-      h('div', { class: 'p3-modal-h' },
-        h('h3', {}, 'Master-Admin'),
-        h('button', { class: 'p3-close', onclick: closeModal }, '×')),
+    // Page-Layout (kein Modal — bleibt persistent, kein Klick-außerhalb-schließt)
+    document.body.innerHTML = '';
+    document.body.style.visibility = 'visible';
+    document.body.classList.add('p3-page');
+    const page = h('div', { class: 'p3-page-wrap' },
+      h('header', { class: 'p3-page-header' },
+        h('button', { class: 'p3-btn small', onclick: () => { document.body.classList.remove('p3-page'); window.renderLanding(); } }, '← Übersicht'),
+        h('h1', {}, 'Master-Admin'),
+        h('button', { class: 'p3-btn small', onclick: () => { window.logout(); document.body.classList.remove('p3-page'); window.renderLanding(); } }, 'Logout'),
+      ),
       tabBar,
       body,
     );
-    openModal(content, { wide: true });
+    document.body.appendChild(page);
     render();
   };
 
@@ -690,22 +789,139 @@
     openModal(modal);
   }
 
+  // Bekannte Connectoren — Liste passt zu scraper/connectors/index.mjs
+  const KNOWN_CONNECTORS = [
+    { id: 'kayakers',            label: 'kayakers.nl', supportsListing: true },
+    { id: 'bundesligaKanupolio', label: '1. Bundesliga (bundesliga.kanupolo.de)', supportsListing: false },
+  ];
+
   function openTournamentWizard() {
-    const urlInput = h('input', { type: 'text', class: 'p3-input', placeholder: 'https://cpt.kayakers.nl/View/…' });
     const resultBox = h('div', { class: 'p3-body' });
 
-    async function analyze() {
+    // ─── Schritt 0: Connector-Auswahl ────────────────────────────────
+    function renderStep0() {
+      resultBox.innerHTML = '';
+      resultBox.appendChild(h('div', { class: 'p3-section-title' }, 'Quelle wählen'));
+
+      KNOWN_CONNECTORS.forEach(c => {
+        const card = h('div', {
+          class: 'p3-conn-card',
+          onclick: () => {
+            if (c.supportsListing) loadConnectorTournaments(c.id);
+            else renderManualUrlEntry(c.id);
+          },
+        },
+          h('strong', {}, c.label),
+          h('div', { class: 'p3-hint' },
+            c.supportsListing ? 'Aktuelle Turniere automatisch laden' : 'URL manuell eingeben'),
+        );
+        resultBox.appendChild(card);
+      });
+
+      resultBox.appendChild(h('div', { class: 'p3-section-title', style: 'margin-top:20px' }, 'Oder direkt URL eingeben'));
+      const urlInput = h('input', { type: 'text', class: 'p3-input', placeholder: 'https://cpt.kayakers.nl/View/…' });
+      const btn = h('button', { class: 'p3-btn primary' }, 'Analysieren');
+      urlInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
+      btn.onclick = () => analyze(btn, urlInput.value.trim());
+      resultBox.appendChild(h('div', { class: 'p3-field' }, urlInput));
+      resultBox.appendChild(btn);
+      setTimeout(() => urlInput.focus(), 50);
+    }
+
+    // ─── Schritt 1: Tournament-Liste aus Connector ───────────────────
+    async function loadConnectorTournaments(connectorId) {
+      resultBox.innerHTML = '';
+      resultBox.appendChild(h('div', { class: 'p3-hint', style: 'padding:20px; text-align:center' }, '🔄 Lade Turnier-Liste …'));
+
       try {
-        const result = await api('/api/admin/tournaments/discover', {
-          method: 'POST', body: JSON.stringify({ url: urlInput.value.trim() }),
-        });
-        showWizardStep2(result.result);
+        const result = await api(`/api/admin/discover/list?connector=${encodeURIComponent(connectorId)}&country=DE`);
+        renderConnectorTournamentList(connectorId, result.tournaments || []);
       } catch (e) {
-        if (e.data?.error === 'manual') {
-          showWizardManual(e.data.suggestedSource || {});
-        } else {
-          toast('Discovery fehlgeschlagen: ' + e.message, 'error');
+        toast('Liste konnte nicht geladen werden: ' + e.message, 'error');
+        renderStep0();
+      }
+    }
+
+    function renderConnectorTournamentList(connectorId, list) {
+      resultBox.innerHTML = '';
+      const back = h('button', { class: 'p3-btn small', onclick: renderStep0 }, '← Zurück');
+      resultBox.appendChild(back);
+
+      resultBox.appendChild(h('div', { class: 'p3-section-title' }, `${list.length} Turniere gefunden`));
+
+      const search = h('input', {
+        type: 'text', class: 'p3-input', placeholder: '🔍 Suchen (Name, Land) …',
+        style: 'margin-bottom:8px',
+      });
+      const listEl = h('div');
+      function render(filter = '') {
+        listEl.innerHTML = '';
+        const ft = filter.trim().toLowerCase();
+        let shown = 0;
+        list.forEach(t => {
+          const matches = !ft
+            || t.name.toLowerCase().includes(ft)
+            || (t.countryCode || '').toLowerCase().includes(ft)
+            || (t.dateRange || '').toLowerCase().includes(ft);
+          if (!matches) return;
+          shown++;
+          const card = h('div', {
+            class: 'p3-conn-card',
+            onclick: () => analyze(null, t.viewUrl),
+          },
+            h('strong', {}, t.name),
+            h('div', { class: 'p3-hint' }, `${t.dateRange || '—'}${t.countryCode ? ' · ' + t.countryCode : ''}`),
+          );
+          listEl.appendChild(card);
+        });
+        if (shown === 0) {
+          listEl.appendChild(h('div', { class: 'p3-hint', style: 'padding:8px' },
+            `Keine Treffer für "${filter}".`));
         }
+      }
+      search.oninput = (e) => render(e.target.value);
+      resultBox.appendChild(search);
+      resultBox.appendChild(listEl);
+      render('');
+    }
+
+    function renderManualUrlEntry(connectorId) {
+      resultBox.innerHTML = '';
+      const back = h('button', { class: 'p3-btn small', onclick: renderStep0 }, '← Zurück');
+      resultBox.appendChild(back);
+      resultBox.appendChild(h('div', { class: 'p3-section-title' }, 'URL eingeben'));
+      const urlInput = h('input', { type: 'text', class: 'p3-input', placeholder: 'https://…' });
+      const btn = h('button', { class: 'p3-btn primary' }, 'Analysieren');
+      urlInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
+      btn.onclick = () => analyze(btn, urlInput.value.trim());
+      resultBox.appendChild(h('div', { class: 'p3-field' }, urlInput));
+      resultBox.appendChild(btn);
+      setTimeout(() => urlInput.focus(), 50);
+    }
+
+    async function analyze(btn, url) {
+      if (!url) { toast('Bitte URL angeben', 'error'); return; }
+      const runner = async () => {
+        try {
+          const result = await api('/api/admin/tournaments/discover', {
+            method: 'POST', body: JSON.stringify({ url }),
+          });
+          showWizardStep2(result.result);
+        } catch (e) {
+          if (e.data?.error === 'manual') {
+            showWizardManual(e.data.suggestedSource || {});
+          } else {
+            toast('Discovery fehlgeschlagen: ' + e.message, 'error');
+          }
+        }
+      };
+      if (btn) await withLoading(btn, 'Analysiere …', runner);
+      else {
+        // Aus der Tournament-Liste angeklickt — Loading-Banner in resultBox zeigen
+        resultBox.innerHTML = '';
+        resultBox.appendChild(h('div', { class: 'p3-hint', style: 'padding:20px; text-align:center' },
+          '🔄 Analysiere Turnier …'));
+        await runner();
       }
     }
 
@@ -718,57 +934,81 @@
       };
       const teamPicks = [];
       const teamList = h('div', { class: 'p3-team-pick' });
+
+      function renderTeamList(filter = '') {
+        teamList.innerHTML = '';
+        const ft = filter.trim().toLowerCase();
+        let shown = 0;
+        teamPicks.forEach(p => {
+          const matches = !ft || p.team.name.toLowerCase().includes(ft) || (p.team.division || '').toLowerCase().includes(ft);
+          if (!matches && !p.cb.checked) return;
+          shown++;
+          teamList.appendChild(h('label', { class: 'p3-team-row' },
+            p.cb, h('span', {}, p.team.name), h('span', { class: 'p3-hint' }, ` · ${p.team.division || ''}`), p.labelInput));
+        });
+        if (shown === 0) {
+          teamList.appendChild(h('div', { class: 'p3-hint', style: 'padding:8px' },
+            `Keine Treffer für "${filter}". Tipp: leeres Suchfeld zeigt alle ${teamPicks.length} Teams.`));
+        }
+      }
+
       (disc.allTeams || []).forEach(t => {
         const cb = h('input', { type: 'checkbox' });
         const labelInput = h('input', { type: 'text', class: 'p3-input small', placeholder: 'Pillen-Label', style: 'width:100px' });
         teamPicks.push({ team: t, cb, labelInput });
-        teamList.appendChild(h('label', { class: 'p3-team-row' },
-          cb, h('span', {}, t.name), h('span', { class: 'p3-hint' }, ` · ${t.division || ''}`), labelInput));
       });
+
+      const searchInput = h('input', {
+        type: 'text', class: 'p3-input', placeholder: '🔍 Suchen (z.B. VMW, Berlin, U21) …',
+        style: 'margin-bottom:8px',
+      });
+      searchInput.oninput = (e) => renderTeamList(e.target.value);
+
       resultBox.appendChild(h('div', { class: 'p3-banner ok' },
         disc.hasSchedule ? '✓ Spielplan gefunden' : '⚠ Reduzierte Discovery — Spielplan kommt später'));
       resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Name'), inputs.name));
       resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Slug'), inputs.slug));
       resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Tage (komma-getrennt YYYY-MM-DD)'), inputs.dates));
-      if ((disc.allTeams || []).length) {
-        resultBox.appendChild(h('div', { class: 'p3-section-title' }, 'Eigene Teams auswählen'));
+      if (teamPicks.length) {
+        resultBox.appendChild(h('div', { class: 'p3-section-title' }, `Eigene Teams auswählen (${teamPicks.length} gefunden)`));
+        resultBox.appendChild(searchInput);
         resultBox.appendChild(teamList);
+        renderTeamList('');
       }
-      resultBox.appendChild(h('button', {
-        class: 'p3-btn primary',
-        onclick: async () => {
-          const dates = inputs.dates.value.split(',').map(s => s.trim()).filter(Boolean);
-          const ourTeams = teamPicks
-            .filter(p => p.cb.checked)
-            .map(p => {
-              const label = p.labelInput.value || codeFromName(p.team.name);
-              return {
-                code: codeFromName(p.team.name), pillLabel: label, short: p.team.name,
-                name: p.team.name, tid: p.team.tid,
-              };
-            });
-          const config = {
-            slug: inputs.slug.value.trim(),
-            name: inputs.name.value.trim(),
-            type: 'tournament',
-            connector: disc.connectorId,
-            showStandings: false,
-            source: disc.source,
-            status: disc.hasSchedule ? 'active' : 'awaiting-schedule',
-            dates: disc.hasSchedule ? dates : [],
-            expectedDates: disc.hasSchedule ? null : dates,
-            ourTeams,
-          };
-          try {
-            await api('/api/admin/tournaments', { method: 'POST', body: JSON.stringify({ config }) });
-            toast('Turnier angelegt', 'success');
-            closeModal();
-            window.openMasterAdmin();
-          } catch (e) {
-            toast('Fehler: ' + e.message, 'error');
-          }
-        },
-      }, 'Speichern'));
+      const saveBtn = h('button', { class: 'p3-btn primary' }, 'Speichern');
+      saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
+        const dates = inputs.dates.value.split(',').map(s => s.trim()).filter(Boolean);
+        const ourTeams = teamPicks
+          .filter(p => p.cb.checked)
+          .map(p => {
+            const label = p.labelInput.value || codeFromName(p.team.name);
+            return {
+              code: codeFromName(p.team.name), pillLabel: label, short: p.team.name,
+              name: p.team.name, tid: p.team.tid,
+            };
+          });
+        const config = {
+          slug: inputs.slug.value.trim(),
+          name: inputs.name.value.trim(),
+          type: 'tournament',
+          connector: disc.connectorId,
+          showStandings: false,
+          source: disc.source,
+          status: disc.hasSchedule ? 'active' : 'awaiting-schedule',
+          dates: disc.hasSchedule ? dates : [],
+          expectedDates: disc.hasSchedule ? null : dates,
+          ourTeams,
+        };
+        try {
+          await api('/api/admin/tournaments', { method: 'POST', body: JSON.stringify({ config }) });
+          toast('Turnier angelegt', 'success');
+          closeModal();
+          window.openMasterAdmin();
+        } catch (e) {
+          toast('Fehler: ' + e.message, 'error');
+        }
+      });
+      resultBox.appendChild(saveBtn);
     }
 
     function showWizardManual(suggested) {
@@ -790,14 +1030,10 @@
       h('div', { class: 'p3-modal-h' },
         h('h3', {}, 'Neues Turnier'),
         h('button', { class: 'p3-close', onclick: closeModal }, '×')),
-      h('div', { class: 'p3-body' },
-        h('div', { class: 'p3-field' }, h('label', {}, 'Turnier-URL'), urlInput,
-          h('div', { class: 'p3-hint' }, 'z.B. https://cpt.kayakers.nl/View/MyTournament')),
-        h('button', { class: 'p3-btn primary', onclick: analyze }, 'Analysieren'),
-      ),
       resultBox,
     );
     openModal(content, { wide: true });
+    renderStep0();
   }
 
   // ═══════════════════════════════════════════════════════════════════

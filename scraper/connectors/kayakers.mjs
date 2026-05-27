@@ -240,14 +240,28 @@ function parseFirstDateFromHtml(html) {
     Jan: 1, Feb: 2, Mar: 3, Mär: 3, Apr: 4, May: 5, Mai: 5,
     Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Okt: 10, Nov: 11, Dec: 12, Dez: 12,
   };
-  const re = /\b(\d{1,2})\s+(Jan|Feb|Mar|Mär|Apr|May|Mai|Jun|Jul|Aug|Sep|Oct|Okt|Nov|Dec|Dez)(?:\w+)?(?:\s+(\d{4}))?/i;
-  const m = html.match(re);
-  if (!m) return null;
-  const day = String(m[1]).padStart(2, '0');
-  const monthKey = m[2][0].toUpperCase() + m[2].slice(1).toLowerCase();
-  const month = String(monthMap[monthKey] ?? monthMap[m[2]]).padStart(2, '0');
-  const year = m[3] || String(new Date().getFullYear());
-  return `${year}-${month}-${day}`;
+  // kayakers schreibt Zeit-Header wie "07:30 May 23rd 07:30" (Monat vor Tag)
+  // oder auch "07:30 Mai 23 07:30" — beide Reihenfolgen abdecken.
+  const reMonthFirst = /\b(Jan|Feb|Mar|Mär|Apr|May|Mai|Jun|Jul|Aug|Sep|Oct|Okt|Nov|Dec|Dez)\w*\s+(\d{1,2})(?:st|nd|rd|th|\.)?(?:\s+(\d{4}))?/i;
+  const reDayFirst   = /\b(\d{1,2})\.?\s+(Jan|Feb|Mar|Mär|Apr|May|Mai|Jun|Jul|Aug|Sep|Oct|Okt|Nov|Dec|Dez)(?:\w+)?(?:\s+(\d{4}))?/i;
+
+  let day, monthKey, year;
+  const m1 = html.match(reMonthFirst);
+  if (m1) {
+    monthKey = m1[1];
+    day = m1[2];
+    year = m1[3];
+  } else {
+    const m2 = html.match(reDayFirst);
+    if (!m2) return null;
+    day = m2[1];
+    monthKey = m2[2];
+    year = m2[3];
+  }
+  const monthCapital = monthKey[0].toUpperCase() + monthKey.slice(1).toLowerCase();
+  const month = monthMap[monthCapital] ?? monthMap[monthKey];
+  if (!month) return null;
+  return `${year || new Date().getFullYear()}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
 }
 
 function extractDateHintsFromHtml(html) {

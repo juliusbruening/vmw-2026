@@ -31,7 +31,7 @@ import { getStore } from '@netlify/blobs';
 import { getRole, isMaster, isTrainerOrMaster, jsonResponse, unauthorized, forbidden, notFound, badRequest } from '../../lib/auth.mjs';
 import { getTournament, listTournaments, saveTournament, updateTournament } from '../../lib/tournaments.mjs';
 import {
-  listReferees, getReferee, createReferee, updateReferee, softDeleteReferee,
+  listReferees, getReferee, createReferee, updateReferee, softDeleteReferee, hardDeleteReferee,
   generateLoginCode, revokeLoginCode,
 } from '../../lib/referees.mjs';
 import { detectConnector, getConnector } from '../../scraper/connectors/index.mjs';
@@ -90,6 +90,7 @@ export default async (req) => {
   if (req.method === 'POST'   && path === 'tournaments')          return await handleCreateTournament(req);
   const tMatch = path.match(/^tournaments\/([a-z0-9-]+)$/i);
   if (tMatch && req.method === 'PUT')                             return await handleUpdateTournament(req, tMatch[1]);
+  if (tMatch && req.method === 'DELETE')                          return await handleDeleteTournament(tMatch[1]);
   const sMatch = path.match(/^tournaments\/([a-z0-9-]+)\/status$/i);
   if (sMatch && req.method === 'POST')                            return await handleStatus(req, sMatch[1]);
   const scrapeMatch = path.match(/^tournaments\/([a-z0-9-]+)\/scrape$/i);
@@ -102,7 +103,7 @@ export default async (req) => {
   if (rGet && req.method === 'GET')                               return await handleGetReferee(rGet[1]);
   if (req.method === 'POST'   && path === 'referees')             return await handleCreateReferee(req);
   if (rGet && req.method === 'PUT')                               return await handleUpdateReferee(req, rGet[1]);
-  if (rGet && req.method === 'DELETE')                            return await handleDeleteReferee(rGet[1]);
+  if (rGet && req.method === 'DELETE')                            return await handleDeleteReferee(rGet[1], url.searchParams.get('permanent') === '1');
   const codeMatch = path.match(/^referees\/([a-z0-9-]+)\/login-code$/i);
   if (codeMatch && req.method === 'POST')                         return await handleGenerateCode(codeMatch[1]);
   if (codeMatch && req.method === 'DELETE')                       return await handleRevokeCode(codeMatch[1]);
@@ -292,6 +293,25 @@ async function handleUpdateTournament(req, slug) {
   return jsonResponse({ ok: true, config: merged });
 }
 
+async function handleDeleteTournament(slug) {
+  // Hartes Delete: löscht config + snapshot + assignments + Index-Eintrag.
+  // Repo-Datei-basierte Tournaments (Phase 1, z.B. dc2026.json im Repo) bleiben
+  // erhalten — die kommen ja aus dem Repo, der Loader fallback'd dorthin.
+  const store = getStore(STORE_NAME);
+  await store.delete(`${slug}/config.json`).catch(() => {});
+  await store.delete(`${slug}/snapshot.json`).catch(() => {});
+  await store.delete(`${slug}/assignments.json`).catch(() => {});
+  await store.delete(`${slug}/refereeAssignments.json`).catch(() => {});
+
+  const index = (await store.get('index.json', { type: 'json', consistency: 'strong' })) ?? { tournaments: [] };
+  index.tournaments = index.tournaments.filter(t => t.slug !== slug);
+  index.updatedAt = new Date().toISOString();
+  await store.setJSON('index.json', index);
+
+  console.log(`[admin] tournament ${slug} deleted`);
+  return jsonResponse({ ok: true, slug, deleted: true });
+}
+
 async function handleStatus(req, slug) {
   let body; try { body = await req.json(); } catch { body = null; }
   const status = body?.status;
@@ -351,7 +371,12 @@ async function handleUpdateReferee(req, id) {
   return jsonResponse({ ok: true, referee: ref });
 }
 
-async function handleDeleteReferee(id) {
+async function handleDeleteReferee(id, permanent = false) {
+  if (permanent) {
+    const ok = await hardDeleteReferee(id);
+    if (!ok) return notFound();
+    return jsonResponse({ ok: true, id, hardDeleted: true });
+  }
   const ok = await softDeleteReferee(id);
   if (!ok) return notFound();
   return jsonResponse({ ok: true, id, deactivated: true });
