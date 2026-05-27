@@ -1,0 +1,29 @@
+{
+  "slug": "dc2026",
+  "name": "Deutschland Cup 2026",
+  "type": "tournament",
+  "connector": "kayakers",
+  "showStandings": false,
+  "source": {
+    "viewUrl": "https://cpt.kayakers.nl/View/DC2026",
+    "tournamentInfoUrl": "https://cpt.kayakers.nl/Tournament/DC2026",
+    "matchListUrl": "https://cpt.kayakers.nl/MatchList/DC2026",
+    "matchListVid": null,
+    "tournamentId": "5500048e-ff41-4b86-9e9b-810043be6461"
+  },
+  "status": "completed",
+  "dates": ["2026-05-23", "2026-05-24", "2026-05-25"],
+  "expectedDates": null,
+  "timezone": "Europe/Berlin",
+  "pendingTeamSelection": false,
+  "lastRediscoveryAt": null,
+  "ourTeams": [
+    { "code": "U14",   "pillLabel": "U14",     "short": "VMW U14",     "name": "VMW Berlin U14",   "tid": "ce8c0949-ee6d-4526-ad31-9486d8e86f18" },
+    { "code": "U16",   "pillLabel": "U16",     "short": "VMW U16",     "name": "VMW Berlin U16",   "tid": "0948547e-1c67-4492-93bc-618c90442b50" },
+    { "code": "U21",   "pillLabel": "U21",     "short": "VMW U21",     "name": "VMW Berlin U21",   "tid": "ecc239cd-2306-41b9-a659-432e7ed1647a" },
+    { "code": "Women", "pillLabel": "Damen",   "short": "VMW Damen",   "name": "VMW Berlin Women", "tid": "6775d440-1ea0-47ba-8752-7db49f61f988" },
+    { "code": "Men2",  "pillLabel": "Herren",  "short": "VMW Herren",  "name": "VMW Berlin Men2",  "tid": "7b63cb1c-a63b-4c9e-a896-18f0eddcadbe" }
+  ],
+  "createdAt": "2026-05-18T16:00:00Z",
+  "updatedAt": "2026-05-26T08:00:00Z"
+}

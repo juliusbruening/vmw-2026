@@ -1,0 +1,20 @@
+{
+  "slug": "bundesliga-herren-2026",
+  "name": "1. Bundesliga Herren Saison 2026",
+  "type": "external",
+  "externalUrl": "https://vmw-kanupolo-live.netlify.app",
+  "connector": null,
+  "showStandings": true,
+  "source": null,
+  "status": "active",
+  "dates": ["2026-05-23"],
+  "expectedDates": null,
+  "timezone": "Europe/Berlin",
+  "pendingTeamSelection": false,
+  "lastRediscoveryAt": null,
+  "ourTeams": [
+    { "code": "Men1", "pillLabel": "Herren 1", "short": "VMW Herren 1", "name": "VMW Berlin Herren 1", "tid": null }
+  ],
+  "createdAt": "2026-05-26T15:00:00Z",
+  "updatedAt": "2026-05-26T15:00:00Z"
+}
