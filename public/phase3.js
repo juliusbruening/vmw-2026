@@ -839,14 +839,56 @@
     }
   };
 
-  // Wenn die URL "/" ist, rendere Landing
-  if (window.location.pathname === '/' && document.getElementById('app')) {
-    // Wenn wir nicht /t/<slug>-route haben, override
-    if (!window.location.pathname.startsWith('/t/')) {
-      window.addEventListener('DOMContentLoaded', () => {
-        if (window.location.pathname === '/') window.renderLanding();
-      });
+  // ═══════════════════════════════════════════════════════════════════
+  // ROUTING: pathname-basiertes Bootstrap
+  // ═══════════════════════════════════════════════════════════════════
+  //
+  // /                 → Landing-Page (übermalt die DC2026-Shell aus app.js)
+  // /t/<slug>         → Tournament-Live-View (app.js übernimmt)
+  // /admin            → Login-Modal sofort
+  // /me/<code>        → Code in localStorage, dann Profil
+  //
+  // Wichtig: app.js startet immer und füllt die DC2026-Shell. Wir lassen
+  // app.js fertig laufen und ersetzen DANACH den DOM. So bricht nichts
+  // unerwartet, und wenn die Routing-Logik hier scheitert, hat man wenigstens
+  // die alte UI als Fallback.
+
+  function bootstrapRoute() {
+    const pathname = window.location.pathname;
+
+    // /me/<code> — Bookmark-Login für Schiris
+    const meMatch = pathname.match(/^\/me\/([A-Z0-9-]+)/i);
+    if (meMatch) {
+      const code = meMatch[1];
+      localStorage.setItem('refereeAuth', code);
+      window.state.refereeAuth = code;
+      // URL aufräumen und Profil öffnen
+      window.history.replaceState({}, '', '/');
+      window.openMyProfile();
+      return;
     }
+
+    // /admin — Login-Modal sofort
+    if (pathname === '/admin') {
+      // Schon eingeloggt? Dann Master-Admin direkt zeigen.
+      if (window.state.role === 'master') window.openMasterAdmin();
+      else window.openLogin();
+      return;
+    }
+
+    // / — Landing-Page
+    if (pathname === '/') {
+      window.renderLanding();
+      return;
+    }
+
+    // /t/<slug> — app.js rendert die Tournament-View, nichts weiter zu tun
+  }
+
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', bootstrapRoute);
+  } else {
+    bootstrapRoute();
   }
 
 })();

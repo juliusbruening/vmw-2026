@@ -14,13 +14,13 @@ const POLL_INTERVAL_MS = 60_000;
    ========================================================= */
 function detectTournamentSlug() {
   const m = window.location.pathname.match(/^\/t\/([a-z0-9-]+)/i);
-  if (m) return m[1].toLowerCase();
-  return 'dc2026';
+  return m ? m[1].toLowerCase() : null;
 }
 const CURRENT_SLUG = detectTournamentSlug();
 window.CURRENT_SLUG = CURRENT_SLUG;
-// Phase-1-Übergang: Wenn Root, Redirect auf /t/dc2026 ist überflüssig — wir
-// laden einfach DC2026. Phase 4 baut die Landing-Page ein.
+// CURRENT_SLUG === null bedeutet: keine /t/<slug>-Route (also /, /admin, /me/…).
+// In diesem Fall übernimmt phase3.js das Bootstrap (Landing-Page / Login-Modal / Self-Service).
+// app.js skippt fetchData unten, damit nicht parallel die DC2026-UI rendert.
 
 /* =========================================================
    BEAMER-MODUS
@@ -1163,6 +1163,10 @@ document.getElementById('scorersMoreBtn').addEventListener('click', ()=>{
 });
 
 /* INITIAL */
-setTab(state.tab);
-fetchData();
-setInterval(fetchData, POLL_INTERVAL_MS);
+// Nur initialisieren wenn wir auf einer /t/<slug>-Route sind.
+// Auf /, /admin, /me/<code> übernimmt phase3.js komplett — siehe dort.
+if (CURRENT_SLUG) {
+  setTab(state.tab);
+  fetchData();
+  setInterval(fetchData, POLL_INTERVAL_MS);
+}
