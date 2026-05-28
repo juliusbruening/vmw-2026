@@ -113,12 +113,20 @@ function applyHeaderTitle(uiConfig){
     back.onclick = () => { window.location.href = '/'; };
     headerInner.insertBefore(back, headerInner.firstChild);
   }
-  // Altes Zahnrad-Icon umbinden auf Trainer-Login (nur im Turnier-Kontext)
+  // Altes Zahnrad-Icon umbinden auf Trainer-Login / Schiri-Einteilung (Turnier-Kontext)
   const menuBtn = document.querySelector('header.app .menu');
   if (menuBtn) {
-    menuBtn.title = 'Trainer-Login';
+    menuBtn.title = 'Schiri-Einteilung';
     menuBtn.onclick = (e) => {
       e.preventDefault();
+      // Bereits eingeloggt als Trainer/Master? Direkt zur Einteilungs-Page.
+      if (window.state.role === 'trainer' || window.state.role === 'master') {
+        if (typeof window.openTournamentLineup === 'function') {
+          window.openTournamentLineup(window.CURRENT_SLUG);
+          return;
+        }
+      }
+      // Sonst Login öffnen
       if (typeof window.openTrainerLogin === 'function') {
         window.openTrainerLogin();
       } else if (typeof window.openLogin === 'function') {

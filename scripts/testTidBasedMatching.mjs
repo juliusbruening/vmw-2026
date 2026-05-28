@@ -4,12 +4,15 @@
 // fälschlich als VMW-Spiele markiert, weil das Namens-Matching auf Platzhalter-
 // Teamnamen reagierte).
 //
-// Neue Logik (scraper/index.mjs): Match zählt nur dann als ourTeam-Spiel, wenn
-// die Team-TID in config.ourTeams[].tid enthalten ist. Platzhalter-Teams haben
-// oft keine echte TID → werden automatisch ignoriert.
+// Neue Logik (scraper/connectors/kayakers.mjs): Match zählt nur dann als
+// ourTeam-Spiel, wenn die Team-TID in config.ourTeams[].tid enthalten ist.
+// Platzhalter-Teams haben oft keine echte TID → werden automatisch ignoriert.
+//
+// HINWEIS: Verwendet eine synthetische Config statt eines spezifischen
+// Turniers aus dem Blob-Store/Repo — der Test ist damit unabhängig davon,
+// ob ein bestimmtes Turnier existiert.
 
 import { buildSnapshot } from '../scraper/index.mjs';
-import { getTournament } from '../lib/tournaments.mjs';
 
 let pass = 0, fail = 0;
 function expect(label, ok) {
@@ -17,7 +20,21 @@ function expect(label, ok) {
   else    { console.log('✗ ' + label); fail++; }
 }
 
-const dc = await getTournament('dc2026');
+// Synthetische Test-Config (keine Abhängigkeit zu getTournament)
+const testConfig = {
+  slug: 'test-tid-matching',
+  name: 'Test-Turnier',
+  connector: 'kayakers',
+  dates: ['2026-05-23'],
+  source: {
+    matchListUrl: 'https://cpt.kayakers.nl/MatchList',
+    matchListVid: 'test-vid',
+    tournamentId: 'test-tournament-id',
+  },
+  ourTeams: [
+    { code: 'U21', name: 'VMW Berlin U21', tid: 'ecc239cd-2306-41b9-a659-432e7ed1647a' },
+  ],
+};
 
 // Synthetisches HTML mit 3 Matches:
 //   1) Echtes VMW-Spiel — beide TIDs gültig, VMW Berlin U21 spielt → ourTeam=U21
@@ -71,7 +88,7 @@ async function mockFetcher(url) {
   return '';
 }
 
-const snapshot = await buildSnapshot(dc, { fetcher: mockFetcher });
+const snapshot = await buildSnapshot(testConfig, { fetcher: mockFetcher });
 
 const m1 = snapshot.matches.find(m => m.nr === 1);
 const m2 = snapshot.matches.find(m => m.nr === 2);

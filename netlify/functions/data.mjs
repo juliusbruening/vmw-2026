@@ -1,4 +1,4 @@
-// netlify/functions/data.mjs (Phase 3+)
+// netlify/functions/data.mjs (Phase 7+)
 //
 // GET /api/data?slug=<slug>
 //
@@ -8,49 +8,74 @@
 //   - assignments    (Phase 3+ rollenbasiert) ODER legacy refereeAssignments
 //   - referees       (Public-View aller aktiven Schiris — für den Picker im Frontend)
 //
-// Strong-Consistency-Reads für assignments + referees, damit gerade-gespeicherte
-// Einträge sofort sichtbar sind.
+// Für externe Turniere zusätzlich:
+//   - external.resources, externalAssignments
 
 import { getStore } from '@netlify/blobs';
-import { getTournament } from '../../lib/tournaments.mjs';
+import { getTournament, vmwCategoriesFor } from '../../lib/tournaments.mjs';
 import { listReferees } from '../../lib/referees.mjs';
+import { listExternalAssignments } from '../../lib/externalAssignments.mjs';
 
 export default async (req) => {
   try {
     const url = new URL(req.url);
-    const slug = (url.searchParams.get('slug') || 'dc2026').trim();
+    const slug = (url.searchParams.get('slug') || '').trim();
+    if (!slug) {
+      return new Response(JSON.stringify({ error: 'slug parameter required' }),
+        { status: 400, headers: { 'content-type': 'application/json' } });
+    }
 
-    const store = getStore('tournaments');
-    const [snapshot, assignments, legacyRefs, config, referees] = await Promise.all([
-      store.get(`${slug}/snapshot.json`, { type: 'json' }),
-      store.get(`${slug}/assignments.json`, { type: 'json', consistency: 'strong' }),
-      store.get(`${slug}/refereeAssignments.json`, { type: 'json', consistency: 'strong' }),
-      getTournament(slug),
-      // Public-View — KEIN Vollname, kein loginCode
-      listReferees({ activeOnly: true, includeSecret: false }).catch(() => []),
-    ]);
-
+    const config = await getTournament(slug);
     if (!config) {
       return new Response(JSON.stringify({ error: `Tournament "${slug}" nicht gefunden` }),
         { status: 404, headers: { 'content-type': 'application/json' } });
     }
 
-    // External Tournaments haben keinen eigenen Snapshot — Hinweis statt leere Daten
+    const referees = await listReferees({ activeOnly: true, includeSecret: false }).catch(() => []);
+
+    // ─── External Tournaments: Dashboard mit Ressourcen + Einsätzen ──────────
     if (config.type === 'external') {
+      const externalAssignments = await listExternalAssignments(slug).catch(() => []);
+      const resources = Array.isArray(config.external?.resources) ? config.external.resources : [];
+
       return new Response(JSON.stringify({
         slug, external: true,
         config: {
-          slug: config.slug, name: config.name, type: 'external',
-          status: config.status, externalUrl: config.externalUrl || null,
+          slug: config.slug,
+          name: config.name,
+          type: 'external',
+          status: config.status,
+          dates: config.dates ?? [],
+          ourTeams: config.ourTeams ?? [],
+          vmwCategories: vmwCategoriesFor(config),
+          external: { resources },
+          // Legacy-Felder
+          externalUrl: config.externalUrl || null,
+          externalDays: Array.isArray(config.externalDays) ? config.externalDays : null,
         },
+        externalAssignments,
+        referees,
+        server: new Date().toISOString(),
       }), {
         status: 200,
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'public, max-age=300',
+          'cache-control': 'public, max-age=5',
+          'netlify-cdn-cache-control': 'public, s-maxage=5, stale-while-revalidate=60',
         },
       });
     }
+
+    // ─── Normales Turnier (kayakers): Live-Spielplan ─────────────────────────
+    const store = getStore('tournaments');
+    const [snapshot, assignments, legacyRefs, externalAssignments] = await Promise.all([
+      store.get(`${slug}/snapshot.json`, { type: 'json' }),
+      store.get(`${slug}/assignments.json`, { type: 'json', consistency: 'strong' }),
+      store.get(`${slug}/refereeAssignments.json`, { type: 'json', consistency: 'strong' }),
+      // Auch kayakers-Turniere können manuelle Einsätze haben (Hybrid-Modus,
+      // z.B. wenn kayakers den Spielplan nie liefert oder nur teilweise).
+      listExternalAssignments(slug).catch(() => []),
+    ]);
 
     const uiConfig = {
       slug: config.slug,
@@ -64,6 +89,7 @@ export default async (req) => {
       ourTeams: config.ourTeams ?? [],
       pendingTeamSelection: !!config.pendingTeamSelection,
       source: config.source ?? null,
+      vmwCategories: vmwCategoriesFor(config),
     };
 
     const payload = {
@@ -72,6 +98,7 @@ export default async (req) => {
       snapshot: snapshot ?? null,
       assignments: assignments ?? null,                       // Phase 3 rollenbasiert
       refereeAssignments: legacyRefs ?? {},                   // Phase 1 legacy
+      externalAssignments: externalAssignments ?? [],         // Phase 7 — Hybrid-Modus
       referees,                                                // Public-Schiri-Index für Picker
       server: new Date().toISOString(),
     };

@@ -5,6 +5,7 @@
 //   GET    /api/me/profile                  → eigene Stammdaten (ohne loginCode)
 //   PUT    /api/me/profile                  → Self-Edit (whitelisted Felder)
 //   GET    /api/me/entries?year=YYYY        → eigene Einsätze (auto + manuell)
+//   GET    /api/me/pdf-einsatzbogen?year=Y  → DKV-PDF mit allen Einsätzen
 //   POST   /api/me/manual-entry             → neuer manueller Eintrag
 //   PUT    /api/me/manual-entry/<id>        → Update
 //   DELETE /api/me/manual-entry/<id>        → löschen
@@ -15,6 +16,11 @@ import { getRole, isSelf, jsonResponse, unauthorized, forbidden, notFound, badRe
 import { getReferee, updateRefereeSelf } from '../../lib/referees.mjs';
 import { aggregateReferees, listManualEntries } from '../../lib/reports.mjs';
 import { ROLES, canAssignRole } from '../../lib/refereeLevels.mjs';
+import {
+  buildEinsatzbogenForReferee,
+  listAutoEntriesForReferee as listAutoEntriesShared,
+} from '../../lib/einsatzbogen.mjs';
+import { listExternalEntriesForReferee } from '../../lib/externalAssignments.mjs';
 
 const STORE = 'club';
 const MANUAL_KEY = (refId, entryId) => `manualEntries/${refId}/${entryId}.json`;
@@ -49,9 +55,10 @@ export default async (req) => {
   if (req.method === 'GET' && path === 'entries') {
     const year = Number(url.searchParams.get('year') || new Date().getFullYear());
 
-    const [agg, manual] = await Promise.all([
+    const [agg, manual, autoDetails] = await Promise.all([
       aggregateReferees({ year }),
       listManualEntries(refereeId, { year }),
+      listAutoEntriesForReferee(refereeId, year),
     ]);
     const bucket = agg.byReferee?.[refereeId];
     return jsonResponse({
@@ -60,8 +67,15 @@ export default async (req) => {
       stats: bucket
         ? { totalGames: bucket.totalGames, byRole: bucket.byRole, byTournament: bucket.byTournament }
         : { totalGames: 0, byRole: {}, byTournament: [] },
+      autoEntries: autoDetails,
       manualEntries: manual,
     });
+  }
+
+  // ── DKV-PDF-Einsatzbogen ───────────────────────────────────────────
+  if (req.method === 'GET' && path === 'pdf-einsatzbogen') {
+    const year = Number(url.searchParams.get('year') || new Date().getFullYear());
+    return await renderPdfEinsatzbogen(refereeId, year);
   }
 
   // ── Manuelle Einträge ──────────────────────────────────────────────
@@ -97,6 +111,7 @@ async function createManualEntry(req, refereeId) {
     refereeId,
     tournamentName: body.tournamentName.trim(),
     tournamentDate: body.tournamentDate,
+    matchNr:        (body.matchNr || '').toString().trim(),
     matchLabel:     (body.matchLabel || '').trim(),
     role:           body.role,
     notes:          (body.notes || '').trim(),
@@ -128,10 +143,53 @@ async function deleteManualEntry(refereeId, entryId) {
   return jsonResponse({ ok: true, id: entryId, deleted: true });
 }
 
+/**
+ * Liest pro Match-Nr die auto-zugewiesenen Rollen des Schiris aus allen
+ * Turnieren des Jahres und liefert eine flache Liste:
+ *   [{ slug, tournamentName, date, matchNr, role, division }, …]
+ */
+// Wrapper für die /api/me/entries-Route: nutzt den shared-Helper aus einsatzbogen.mjs
+// und ergänzt die externen Einträge (gleiche Logik wie buildEinsatzbogen, aber
+// als zwei separate Listen für die UI-Tabelle exponiert).
+async function listAutoEntriesForReferee(refereeId, year) {
+  const { listTournaments } = await import('../../lib/tournaments.mjs');
+  const [tournaments, autoOnly] = await Promise.all([
+    listTournaments(),
+    listAutoEntriesShared(refereeId, year),
+  ]);
+  const external = await listExternalEntriesForReferee(refereeId, tournaments, year);
+  const all = [...autoOnly, ...external];
+  all.sort((a, b) => {
+    const d = (b.date || '').localeCompare(a.date || '');
+    if (d !== 0) return d;
+    return Number(a.matchNr) - Number(b.matchNr);
+  });
+  return all;
+}
+
 function validateManualEntry(entry) {
   if (!entry) return 'body required';
   if (!entry.tournamentName || typeof entry.tournamentName !== 'string') return 'tournamentName required';
   if (!entry.tournamentDate || !/^\d{4}-\d{2}-\d{2}$/.test(entry.tournamentDate)) return 'tournamentDate must be YYYY-MM-DD';
   if (!entry.role || !ROLES.some(r => r.code === entry.role)) return 'role muss eine bekannte Rolle sein';
   return null;
+}
+
+/**
+ * Rendert das DKV-Einsatzbogen-PDF für den eingeloggten Schiri und das Jahr.
+ * Self-Service-Endpoint — delegiert komplett an lib/einsatzbogen.mjs (gleiche
+ * Pipeline wie der Master-Download).
+ */
+async function renderPdfEinsatzbogen(refereeId, year) {
+  const result = await buildEinsatzbogenForReferee(refereeId, year);
+  if (!result) return notFound();
+  const filename = `DKV-Einsatzbogen-${result.referee.displayName || refereeId}-${year}.pdf`;
+  return new Response(result.pdfBytes, {
+    status: 200,
+    headers: {
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control':       'no-store',
+    },
+  });
 }

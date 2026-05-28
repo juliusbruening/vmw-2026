@@ -80,6 +80,33 @@
     setTimeout(() => el.remove(), 3000);
   }
 
+  // ─── CSV-Download mit Auth-Header (Browser-Link kann keine Header) ───
+  async function downloadCsv(url, filename) {
+    return downloadFile(url, filename);
+  }
+  // Generischer Auth-aware Download (für CSV oder PDF). Sendet beide Header-Typen,
+  // damit Master-, Trainer- und Schiri-Endpoints gleichermaßen funktionieren.
+  async function downloadFile(url, filename) {
+    try {
+      const headers = {};
+      if (window.state.adminPassword) headers['x-admin-password'] = window.state.adminPassword;
+      if (window.state.refereeAuth)   headers['x-personal-token']  = window.state.refereeAuth;
+      const res = await fetch(url, { headers });
+      if (!res.ok) { toast('Download fehlgeschlagen: HTTP ' + res.status, 'error'); return; }
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 100);
+    } catch (e) {
+      toast('Fehler: ' + e.message, 'error');
+    }
+  }
+  window.downloadCsv = downloadCsv;
+  window.downloadFile = downloadFile;
+
   // ─── Button-Loading-Wrapper ───────────────────────────────────────
   // Setzt den Button auf "lädt …", disabled ihn, und stellt nach der Action
   // den Originalzustand wieder her. Verhindert Doppel-Klicks.
@@ -234,6 +261,245 @@
     window.location.href = '/';
   };
 
+  // ═══════════════════════════════════════════════════════════════════
+  // TURNIER-EINTEILUNGS-PAGE (Trainer + Master)
+  // Standalone-Page mit Filter nach Tag, Klasse und Status
+  // ═══════════════════════════════════════════════════════════════════
+  window.openTournamentLineup = async function(slug) {
+    slug = slug || window.CURRENT_SLUG;
+    if (!slug) { toast('Kein Turnier ausgewählt', 'error'); return; }
+    if (!window.state.role) {
+      toast('Bitte erst als Trainer oder Master einloggen', 'error');
+      window.openTrainerLogin();
+      return;
+    }
+
+    const ROLES = [
+      { code: 'ref1', short: '1.SR' }, { code: 'ref2', short: '2.SR' },
+      { code: 'scorer', short: 'Prot' }, { code: 'timer', short: 'Zeit' },
+      { code: 'shotclock', short: 'Shot' },
+      { code: 'line1', short: 'Lin1' }, { code: 'line2', short: 'Lin2' },
+    ];
+
+    document.body.innerHTML = '';
+    document.body.classList.remove('p3-landing-mode');
+    document.body.classList.add('p3-page');
+    document.body.style.visibility = 'visible';
+
+    const titleEl = h('h1', {}, 'Schiri-Einteilung');
+    const filtersBar = h('div', { class: 'p3-lineup-filters' });
+    const body = h('div', { class: 'p3-body' });
+
+    const page = h('div', { class: 'p3-page-wrap' },
+      h('header', { class: 'p3-page-header' },
+        h('button', { class: 'p3-btn small', onclick: () => {
+          document.body.classList.remove('p3-page');
+          window.location.href = `/t/${slug}`;
+        } }, '← Zum Turnier'),
+        titleEl,
+        h('button', { class: 'p3-btn small', onclick: () => {
+          window.logout();
+        } }, 'Logout'),
+      ),
+      filtersBar,
+      body,
+    );
+    document.body.appendChild(page);
+
+    body.appendChild(h('div', { class: 'p3-hint', style: 'padding:16px' }, '🔄 Lade …'));
+
+    let snapshot, assignments, referees, config, externalAssignments;
+    try {
+      const data = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+      snapshot = data.snapshot;
+      assignments = data.assignments || {};
+      referees = data.referees || [];
+      config = data.config;
+      externalAssignments = data.externalAssignments || [];
+      // Setze globalen state für den Picker
+      window.state.snapshot = snapshot;
+      window.state.assignments = assignments;
+      window.state.referees = referees;
+      window.state.externalReferees = referees; // cache für openExternalEntryForm
+      window.CURRENT_SLUG = slug;
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'p3-banner error' }, 'Fehler: ' + e.message));
+      return;
+    }
+
+    titleEl.textContent = `Schiri-Einteilung · ${config.name}`;
+
+    // Filter-State
+    const days = config.dates || [];
+    let activeDayIdx = 0;     // Index in days; -1 = alle Tage
+    let activeDivision = 'all';
+    let activeStatus = 'open'; // 'open' | 'all' | 'done-incomplete'
+
+    // Alle Divisionen im Snapshot — für Klassen-Filter
+    const divsSeen = new Map();
+    snapshot.matches.forEach(m => {
+      if (m.divisionCode && !divsSeen.has(m.divisionCode)) {
+        divsSeen.set(m.divisionCode, m.division);
+      }
+    });
+
+    function renderFilters() {
+      filtersBar.innerHTML = '';
+      // Tag-Filter
+      const dayRow = h('div', { class: 'p3-filter-row' });
+      dayRow.appendChild(h('span', { class: 'p3-flabel' }, 'Tag:'));
+      const allDaysBtn = h('button', { class: 'p3-pillchoice ' + (activeDayIdx === -1 ? 'active' : '') }, 'Alle');
+      allDaysBtn.onclick = () => { activeDayIdx = -1; renderFilters(); renderMatches(); };
+      dayRow.appendChild(allDaysBtn);
+      days.forEach((iso, i) => {
+        const d = new Date(iso + 'T12:00:00+02:00');
+        const label = d.toLocaleDateString('de-DE', { weekday:'short', day:'numeric', month:'short' });
+        const btn = h('button', { class: 'p3-pillchoice ' + (activeDayIdx === i ? 'active' : '') }, label);
+        btn.onclick = () => { activeDayIdx = i; renderFilters(); renderMatches(); };
+        dayRow.appendChild(btn);
+      });
+      filtersBar.appendChild(dayRow);
+
+      // Klassen-Filter (aus snapshot)
+      if (divsSeen.size > 1) {
+        const divRow = h('div', { class: 'p3-filter-row' });
+        divRow.appendChild(h('span', { class: 'p3-flabel' }, 'Klasse:'));
+        const allBtn = h('button', { class: 'p3-pillchoice ' + (activeDivision === 'all' ? 'active' : '') }, 'Alle');
+        allBtn.onclick = () => { activeDivision = 'all'; renderFilters(); renderMatches(); };
+        divRow.appendChild(allBtn);
+        const order = ['U14','U16','U21','Women','Men1','Men2'];
+        const sorted = [...divsSeen.entries()].sort((a,b) => (order.indexOf(a[0]) - order.indexOf(b[0])));
+        sorted.forEach(([code, label]) => {
+          const btn = h('button', { class: 'p3-pillchoice ' + (activeDivision === code ? 'active' : '') }, label);
+          btn.onclick = () => { activeDivision = code; renderFilters(); renderMatches(); };
+          divRow.appendChild(btn);
+        });
+        filtersBar.appendChild(divRow);
+      }
+
+      // Status-Filter
+      const statusRow = h('div', { class: 'p3-filter-row' });
+      statusRow.appendChild(h('span', { class: 'p3-flabel' }, 'Status:'));
+      const statusOptions = [
+        ['open', 'Offen / Live'],
+        ['done-incomplete', 'Beendet & unvollständig'],
+        ['all', 'Alle inkl. beendete'],
+      ];
+      statusOptions.forEach(([k, label]) => {
+        const btn = h('button', { class: 'p3-pillchoice ' + (activeStatus === k ? 'active' : '') }, label);
+        btn.onclick = () => { activeStatus = k; renderFilters(); renderMatches(); };
+        statusRow.appendChild(btn);
+      });
+      filtersBar.appendChild(statusRow);
+    }
+
+    function renderMatches() {
+      body.innerHTML = '';
+      const refsById = new Map(referees.map(r => [r.id, r]));
+      const hasSnapshot = !!snapshot?.matches?.length;
+
+      // ─── Banner bei leerem Spielplan ──────────────────────────────────
+      if (!hasSnapshot) {
+        body.appendChild(h('div', { class: 'p3-banner warning', style: 'margin-bottom:16px' },
+          '⚠ kayakers.nl hat noch keinen Spielplan für dieses Turnier veröffentlicht. ',
+          'Du kannst Schiri-Einsätze trotzdem manuell unten anlegen — sie fließen ',
+          'genauso in die DKV-Bögen wie auto-zugewiesene Einsätze.'));
+      } else {
+        // ─── Normale kayakers-Match-Sektion ──────────────────────────────
+        let matches = snapshot.matches.filter(m => m.ourReferee);
+        if (activeDayIdx !== -1) matches = matches.filter(m => (m.day || 1) - 1 === activeDayIdx);
+        if (activeDivision !== 'all') matches = matches.filter(m => m.divisionCode === activeDivision);
+
+        const isIncomplete = (m) => {
+          const r = assignments[m.nr]?.roles || {};
+          return ROLES.some(role => !r[role.code]);
+        };
+        if (activeStatus === 'open') matches = matches.filter(m => m.status !== 'done');
+        if (activeStatus === 'done-incomplete') matches = matches.filter(m => m.status === 'done' && isIncomplete(m));
+
+        matches.sort((a, b) => {
+          const d = (a.day || 0) - (b.day || 0);
+          if (d !== 0) return d;
+          return (a.time || '').localeCompare(b.time || '');
+        });
+
+        if (!matches.length) {
+          body.appendChild(h('div', { class: 'p3-hint', style: 'padding:24px; text-align:center' },
+            'Keine Spiele für diese Filter.'));
+        } else {
+          body.appendChild(h('div', { class: 'p3-section-title' }, `${matches.length} kayakers-Spiel${matches.length===1?'':'e'}`));
+          matches.forEach(m => {
+            const ass = assignments[m.nr]?.roles || {};
+            const card = h('div', { class: 'p3-lineup-card' });
+            const dateLabel = days[(m.day || 1) - 1] || '';
+            const dateDisplay = dateLabel ? new Date(dateLabel + 'T12:00:00+02:00').toLocaleDateString('de-DE', { day:'numeric', month:'short' }) : '';
+            card.appendChild(h('div', { class: 'p3-lineup-head' },
+              h('span', { class: 'p3-lineup-nr' }, `#${m.nr}`),
+              h('span', { class: 'p3-lineup-time' }, `${dateDisplay} ${m.time || ''}`),
+              h('span', { class: 'p3-lineup-status p3-status-' + m.status }, m.status === 'done' ? 'beendet' : m.status),
+            ));
+            card.appendChild(h('div', { class: 'p3-lineup-teams' }, `${m.teamA?.name || ''} vs ${m.teamB?.name || ''}`));
+            card.appendChild(h('div', { class: 'p3-lineup-meta' }, `${m.division || ''} · Pitch ${m.pitch || '—'}`));
+            const pillRow = h('div', { class: 'p3-pillrow', style: 'margin-top:8px; flex-wrap:wrap' });
+            ROLES.forEach(role => {
+              const refId = ass[role.code];
+              const refName = refId && refsById.get(refId)
+                ? refsById.get(refId).displayName || refsById.get(refId).firstName
+                : '—';
+              const pill = h('button', {
+                class: 'p3-pillchoice' + (refId ? ' active' : ''),
+                style: 'cursor:pointer',
+              }, `${role.short}: ${refName}`);
+              pill.onclick = () => window.openRolePicker(m.nr, role.code);
+              pillRow.appendChild(pill);
+            });
+            card.appendChild(pillRow);
+            body.appendChild(card);
+          });
+        }
+      }
+
+      // ─── Hybrid: Manuelle Einsätze-Sektion (immer sichtbar) ──────────────
+      renderManualSection();
+    }
+
+    async function refreshManual() {
+      const fresh = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+      externalAssignments = fresh.externalAssignments || [];
+      renderMatches();
+    }
+
+    function renderManualSection() {
+      const refsById = new Map(referees.map(r => [r.id, r]));
+      const section = h('div', { style: 'margin-top:32px' });
+
+      section.appendChild(h('div', { class: 'p3-ext-einsatz-header' },
+        h('div', { class: 'p3-section-title' },
+          `Manuelle Einsätze${externalAssignments.length ? ` (${externalAssignments.length})` : ''}`),
+        h('button', { class: 'p3-btn primary small',
+          onclick: () => window.openExternalEntryForm(slug, null, refreshManual) },
+          '+ Einsatz anlegen'),
+      ));
+
+      if (!externalAssignments.length) {
+        section.appendChild(h('div', { class: 'p3-empty-soft' },
+          'Noch keine manuellen Einsätze. Nutze diese Sektion z.B. für ',
+          'Bracket-Spiele, die kayakers nicht zeigt, oder wenn kayakers überhaupt keinen Spielplan hat.'));
+      } else {
+        const list = h('div', { class: 'p3-ext-einsatz-list' });
+        externalAssignments.forEach(e => {
+          list.appendChild(renderExternalEntryCard(slug, e, refsById, true, refreshManual));
+        });
+        section.appendChild(list);
+      }
+      body.appendChild(section);
+    }
+
+    renderFilters();
+    renderMatches();
+  };
+
   // Trainer-Login als separates Modal — nur im Tournament-View aufgerufen
   window.openTrainerLogin = function() {
     if (window.state.role === 'trainer') {
@@ -262,7 +528,8 @@
         localStorage.setItem('vmw.role', 'trainer');
         toast('Eingeloggt als Trainer', 'success');
         closeModal();
-        if (typeof window.renderActiveTab === 'function') window.renderActiveTab();
+        // Direkt zur Einteilungs-Page
+        window.openTournamentLineup(slug);
       } catch (e) {
         window.state.adminPassword = null;
         toast('Login fehlgeschlagen', 'error');
@@ -341,7 +608,10 @@
     }
 
     async function savePick(refId) {
-      const newRoles = { ...currentAssignment, [roleCode]: refId };
+      // currentAssignment kann Felder mit undefined haben — explizit null setzen für leere
+      const cleanCurrent = {};
+      for (const r of ROLES) cleanCurrent[r.code] = currentAssignment[r.code] || null;
+      const newRoles = { ...cleanCurrent, [roleCode]: refId };
       try {
         const slug = window.CURRENT_SLUG || 'dc2026';
         const result = await api(`/api/admin/t/${slug}/assignments/${matchNr}`, {
@@ -351,28 +621,42 @@
         window.state.assignments = result.assignments;
         toast('Gespeichert', 'success');
         closeModal();
-        if (typeof window.renderActiveTab === 'function') window.renderActiveTab();
+        // Falls auf Lineup-Page → neu rendern
+        if (typeof window.openTournamentLineup === 'function' && document.body.classList.contains('p3-page')) {
+          window.openTournamentLineup(slug);
+        } else if (typeof window.renderActiveTab === 'function') {
+          window.renderActiveTab();
+        }
       } catch (e) {
-        toast('Fehler: ' + (e.message || 'unbekannt'), 'error');
+        // Detaillierte Server-Fehlermeldung statt nur "Fehler"
+        const msg = e.data?.message || e.data?.error || e.message || 'unbekannt';
+        toast('Fehler: ' + msg, 'error');
       }
     }
 
-    const filters = h('div', { class: 'p3-picker-filters' },
-      h('div', { class: 'p3-filter-row' },
+    const filters = h('div', { class: 'p3-picker-filters' });
+    function renderFilterPills() {
+      filters.innerHTML = '';
+      filters.appendChild(h('div', { class: 'p3-filter-row' },
         h('span', { class: 'p3-flabel' }, 'Kategorie:'),
-        ['all', ...CATEGORIES].map(c => h('button', {
-          class: 'p3-pillchoice ' + (filterCategory === c ? 'active' : ''),
-          onclick: () => { filterCategory = c; render(); },
-        }, c === 'all' ? 'Alle' : c))
-      ),
-      h('div', { class: 'p3-filter-row' },
+        ...['all', ...CATEGORIES].map(c => {
+          const btn = h('button', { class: 'p3-pillchoice' + (filterCategory === c ? ' active' : '') },
+            c === 'all' ? 'Alle' : c);
+          btn.onclick = () => { filterCategory = c; renderFilterPills(); render(); };
+          return btn;
+        }),
+      ));
+      filters.appendChild(h('div', { class: 'p3-filter-row' },
         h('span', { class: 'p3-flabel' }, 'Klasse:'),
-        ['all', ...REFEREE_LEVELS].map(l => h('button', {
-          class: 'p3-pillchoice ' + (filterLevel === l ? 'active' : ''),
-          onclick: () => { filterLevel = l; render(); },
-        }, l === 'all' ? 'Alle' : l))
-      ),
-    );
+        ...['all', ...REFEREE_LEVELS].map(l => {
+          const btn = h('button', { class: 'p3-pillchoice' + (filterLevel === l ? ' active' : '') },
+            l === 'all' ? 'Alle' : l);
+          btn.onclick = () => { filterLevel = l; renderFilterPills(); render(); };
+          return btn;
+        }),
+      ));
+    }
+    renderFilterPills();
     const searchEl = h('input', {
       type: 'text', placeholder: '🔍 Suchen…', class: 'p3-input',
       oninput: (e) => { search = e.target.value; render(); },
@@ -499,15 +783,39 @@
           h('div', { class: 'p3-section-title' }, `Einsätze ${entries.year}`),
           renderEntriesTable(entries),
 
-          h('button', {
-            class: 'p3-btn primary',
-            style: 'margin-top:12px',
-            onclick: () => window.openManualEntryForm(),
-          }, '+ Manuellen Einsatz ergänzen'),
+          // ─── Action-Reihe: manueller Eintrag + DKV-PDF ──────────────────
+          h('div', { class: 'p3-row', style: 'gap:8px;flex-wrap:wrap;margin-top:12px' },
+            h('button', {
+              class: 'p3-btn primary',
+              onclick: () => window.openManualEntryForm(),
+            }, '+ Manuellen Einsatz ergänzen'),
 
-          // ─── Stammdaten ────────────────────────────────────────────────
-          h('div', { class: 'p3-section-title' }, 'Stammdaten'),
-          ...renderProfileForm(ref),
+            h('button', {
+              class: 'p3-btn',
+              title: incomplete
+                ? 'Stammdaten unvollständig — PDF enthält Lücken'
+                : 'DKV-Einsatzbogen als PDF herunterladen',
+              onclick: (e) => withLoading(e.currentTarget, 'PDF wird erstellt …', async () => {
+                const filename = `DKV-Einsatzbogen-${ref.code || ref.id}-${entries.year}.pdf`;
+                await window.downloadFile(
+                  `/api/me/pdf-einsatzbogen?year=${entries.year}`,
+                  filename,
+                );
+              }),
+            }, '⬇ DKV-Einsatzbogen (PDF)'),
+          ),
+
+          // ─── Stammdaten (eingeklappt) ──────────────────────────────────
+          (() => {
+            const details = h('details', { class: 'p3-collapse' });
+            if (incomplete) details.open = true; // zwingend offen wenn unvollständig
+            details.appendChild(h('summary', {},
+              h('span', { class: 'p3-section-title-inline' }, 'Stammdaten'),
+              h('span', { class: 'p3-hint' }, incomplete ? ' · ⚠ unvollständig' : ' · vollständig'),
+            ));
+            renderProfileForm(ref).forEach(el => details.appendChild(el));
+            return details;
+          })(),
         ),
       );
       document.body.appendChild(page);
@@ -521,31 +829,26 @@
       ref1: '1. SR', ref2: '2. SR', scorer: 'Protokoll', timer: 'Zeit',
       shotclock: 'Shotclock', line1: '1. Linie', line2: '2. Linie',
     };
-    // Manuelle Einträge holen + flach mappen
     const rows = [];
+    // Auto-Einträge — eine Zeile pro Einsatz mit Datum + Spielnummer
+    (entries.autoEntries || []).forEach(e => {
+      rows.push({
+        date: e.date,
+        tournament: e.tournamentName,
+        match: `#${e.matchNr}`,
+        role: ROLE_LABELS[e.role] || e.role,
+        source: 'auto',
+      });
+    });
+    // Manuelle Einträge
     (entries.manualEntries || []).forEach(e => {
       rows.push({
         date: e.tournamentDate,
         tournament: e.tournamentName,
-        match: e.matchLabel || '—',
+        match: e.matchNr ? `#${e.matchNr}` : (e.matchLabel || '—'),
         role: ROLE_LABELS[e.role] || e.role,
         source: 'manuell',
         entryId: e.id,
-      });
-    });
-    // Auto-Einträge: aus byTournament hochzählen — Detail-Liste nicht im /me-Endpoint
-    // (Wir zeigen für Auto-Einträge nur eine zusammengefasste Zeile pro Turnier + Rolle.)
-    Object.values(entries.stats?.byTournament || []).forEach(t => {
-      if (t.manual) return; // bereits gerendert
-      Object.entries(t.byRole || {}).forEach(([roleCode, count]) => {
-        if (!count) return;
-        rows.push({
-          date: '',
-          tournament: t.name,
-          match: `${count}× Einsatz`,
-          role: ROLE_LABELS[roleCode] || roleCode,
-          source: 'auto',
-        });
       });
     });
     rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -664,17 +967,18 @@
         h('h3', {}, 'Manuellen Einsatz ergänzen'),
         h('button', { class: 'p3-close', onclick: closeModal }, '×')),
       h('div', { class: 'p3-body' },
-        input('tournamentName', 'Turniername *'),
+        input('tournamentName', 'Veranstaltung *', { placeholder: 'z.B. Pokal Frühling Cottbus 2026' }),
         input('tournamentDate', 'Datum *', { type: 'date' }),
-        input('matchLabel', 'Spiel (Free-Text)', { placeholder: 'z.B. Cottbus U21 vs. Berlin U21' }),
-        select('role', 'Rolle *', ROLES.map(r => ({ value: r.code, label: r.label }))),
-        input('notes', 'Notizen (optional)'),
+        input('matchNr', 'Spiel-Nr. *', { placeholder: 'z.B. 42' }),
+        select('role', 'Funktion *', ROLES.map(r => ({ value: r.code, label: r.label }))),
+        input('notes', 'Bemerkung (optional)'),
         h('button', {
           class: 'p3-btn primary',
           onclick: async () => {
             try {
               const body = {};
               for (const k of Object.keys(inputs)) body[k] = inputs[k].value;
+              // matchNr als String hinterlegen, weil DKV-Bogen das so erwartet
               await api('/api/me/manual-entry', { method: 'POST', body: JSON.stringify(body) });
               toast('Eintrag gespeichert', 'success');
               closeModal();
@@ -703,7 +1007,7 @@
 
     async function render() {
       tabBar.innerHTML = '';
-      for (const t of [['tournaments','Turniere'], ['einteilungen','Einteilungen'], ['referees','Schiris'], ['reports','Reports']]) {
+      for (const t of [['tournaments','Turniere'], ['referees','Schiris'], ['reports','Reports']]) {
         const btn = h('button', {
           class: 'p3-tab ' + (activeTab === t[0] ? 'active' : ''),
           onclick: () => { activeTab = t[0]; render(); },
@@ -725,24 +1029,6 @@
 
     async function renderActiveTab() {
       body.innerHTML = '';
-
-      if (activeTab === 'einteilungen') {
-        // Tournament-Auswahl → dann Spielliste mit Picker-Buttons
-        const result = await api('/api/admin/tournaments');
-        const tournaments = (result.tournaments || []).filter(t => t.type !== 'external');
-        body.appendChild(h('div', { class: 'p3-section-title' }, 'Schiri-Einteilung nach Turnier'));
-        if (!tournaments.length) {
-          body.appendChild(h('div', { class: 'p3-hint' }, 'Noch keine Turniere angelegt.'));
-          return;
-        }
-        tournaments.forEach(t => {
-          body.appendChild(h('div', { class: 'p3-conn-card', onclick: () => openTournamentAssignments(t) },
-            h('strong', {}, t.name),
-            h('div', { class: 'p3-hint' }, `${t.status} · ${(t.dates || []).length} Tage`),
-          ));
-        });
-        return;
-      }
 
       if (activeTab === 'tournaments') {
         const result = await api('/api/admin/tournaments');
@@ -805,6 +1091,21 @@
             codeBtn.onclick = () => withLoading(codeBtn, 'Generiere …', () => generateCode(r.id));
             actions.push(codeBtn);
 
+            // DKV-PDF zentral durch Master herunterladen
+            const pdfBtn = h('button', {
+              class: 'p3-btn small',
+              title: 'DKV-Einsatzbogen für ' + r.displayName + ' herunterladen',
+            }, '📄 PDF');
+            pdfBtn.onclick = () => withLoading(pdfBtn, 'PDF wird erstellt …', async () => {
+              const year = new Date().getFullYear();
+              const safeName = (r.displayName || r.firstName || 'schiri').replace(/[^a-z0-9-]/gi, '_');
+              await window.downloadFile(
+                `/api/admin/referees/${r.id}/pdf-einsatzbogen?year=${year}`,
+                `DKV-Einsatzbogen-${safeName}-${year}.pdf`,
+              );
+            });
+            actions.push(pdfBtn);
+
             const deactivateBtn = h('button', { class: 'p3-btn small danger', title: 'Deaktivieren (Soft-Delete)' }, '🚫');
             deactivateBtn.onclick = () => withLoading(deactivateBtn, '', async () => {
               if (!confirm(`"${r.displayName}" deaktivieren?\nHistorische Einsätze bleiben in den Reports erhalten.`)) return;
@@ -849,9 +1150,31 @@
       if (activeTab === 'reports') {
         const year = new Date().getFullYear();
         const result = await api(`/api/admin/reports/referees?year=${year}`);
-        body.appendChild(h('div', { style: 'display:flex; justify-content:space-between; margin-bottom:12px' },
+        body.appendChild(h('div', { style: 'display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap' },
           h('strong', {}, `Einsätze ${year}`),
-          h('a', { href: `/api/admin/reports/referees.csv?year=${year}`, class: 'p3-btn small' }, '📥 CSV')
+          h('div', { style: 'display:flex; gap:6px' },
+            (() => {
+              const link = h('a', { class: 'p3-btn small' }, '📥 Übersicht-CSV');
+              link.href = `/api/admin/reports/referees.csv?year=${year}`;
+              link.title = 'Eine Zeile pro Schiri, Summen pro Rolle';
+              // Mit Auth-Header — Browser-Download via Blob
+              link.onclick = (e) => {
+                e.preventDefault();
+                downloadCsv(`/api/admin/reports/referees.csv?year=${year}`, `einsaetze-uebersicht-${year}.csv`);
+              };
+              return link;
+            })(),
+            (() => {
+              const link = h('a', { class: 'p3-btn small primary' }, '📥 Detail-CSV (pro Einsatz)');
+              link.href = `/api/admin/reports/entries.csv?year=${year}`;
+              link.title = 'Eine Zeile pro Einsatz — passt zum DKV-Bogen-Layout';
+              link.onclick = (e) => {
+                e.preventDefault();
+                downloadCsv(`/api/admin/reports/entries.csv?year=${year}`, `einsaetze-detail-${year}.csv`);
+              };
+              return link;
+            })(),
+          ),
         ));
         const table = h('table', { class: 'p3-table' },
           h('thead', {}, h('tr', {},
@@ -916,7 +1239,7 @@
       await api(`/api/admin/referees/${id}`, { method: 'DELETE' }); render();
     }
 
-    async function openTournamentAssignments(tournament) {
+    async function openTournamentAssignments_unused(tournament) {
       // Lädt Snapshot + Assignments + Referees, zeigt alle Spiele mit Jury-Team-Match
       // egal welchen Status — Master kann auch beendete Turniere nachpflegen.
       body.innerHTML = '';
@@ -1129,12 +1452,11 @@
       resultBox.appendChild(h('button', { class: 'p3-btn small', onclick: renderStep0 }, '← Zurück'));
       resultBox.appendChild(h('div', { class: 'p3-section-title' }, '↗ Externes Turnier'));
       resultBox.appendChild(h('div', { class: 'p3-hint', style: 'margin-bottom:12px' },
-        'Wird auf der Landing-Page mit ↗-Badge angezeigt. Klick → öffnet die externe URL. Schiri-Einsätze müssen manuell ergänzt werden (Self-Service).'));
+        'Externe Turniere haben Schiri-Einsätze, die Trainer/Master pflegen, plus optionale Links zu externen Spielplänen (PDF, Webseite).'));
 
       const nameInput = h('input', { class: 'p3-input', placeholder: 'z.B. 1. Bundesliga Herren 2026' });
       const slugInput = h('input', { class: 'p3-input', placeholder: 'auto aus Name' });
       const datesInput = h('input', { class: 'p3-input', placeholder: '2026-05-23, 2026-05-24, …' });
-      const singleUrlInput = h('input', { class: 'p3-input', placeholder: 'https://…' });
 
       // Auto-Slug aus Name
       nameInput.oninput = () => {
@@ -1146,39 +1468,57 @@
       };
       slugInput.oninput = () => { slugInput.dataset.touched = '1'; };
 
-      // Multi-Day-Toggle
-      const isMultiDayCb = h('input', { type: 'checkbox' });
-      const singleSection = h('div', { class: 'p3-field' }, h('label', {}, 'Externe URL'), singleUrlInput);
-      const multiSection = h('div', { style: 'display:none' });
-      const dayRows = [];
-      function addDayRow(initial = {}) {
-        const labelInput = h('input', { class: 'p3-input', placeholder: 'z.B. Spieltag 1 — Berlin', value: initial.label || '' });
-        const dateInput  = h('input', { class: 'p3-input', placeholder: '17.-18.05.2026', value: initial.date || '' });
-        const urlInput   = h('input', { class: 'p3-input', placeholder: 'https://…', value: initial.url || '' });
+      // ─── Ressourcen-Liste (Multi-Link) ─────────────────────────────
+      const resourceSection = h('div', {});
+      const resourceRows = [];
+      function addResourceRow(initial = {}) {
+        const titleInput = h('input', { class: 'p3-input', placeholder: 'z.B. Spielplan (PDF)', value: initial.title || '' });
+        const urlInput   = h('input', { class: 'p3-input', placeholder: 'https://…',          value: initial.url   || '' });
         const removeBtn  = h('button', { class: 'p3-btn small danger', title: 'Entfernen', onclick: () => {
-          const idx = dayRows.findIndex(r => r.row === row);
-          if (idx >= 0) dayRows.splice(idx, 1);
+          const idx = resourceRows.findIndex(r => r.row === row);
+          if (idx >= 0) resourceRows.splice(idx, 1);
           row.remove();
         }}, '×');
         const row = h('div', { class: 'p3-multiday-row' },
-          h('div', { style: 'display:grid; grid-template-columns: 1fr 1fr 2fr auto; gap:6px; align-items:end' },
-            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Label'), labelInput),
-            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Datum'), dateInput),
+          h('div', { style: 'display:grid; grid-template-columns: 1fr 2fr auto; gap:6px; align-items:end' },
+            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Titel'), titleInput),
             h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'URL'), urlInput),
             removeBtn,
           ),
         );
-        dayRows.push({ labelInput, dateInput, urlInput, row });
-        multiSection.appendChild(row);
+        resourceRows.push({ titleInput, urlInput, row });
+        resourceSection.appendChild(row);
       }
-      isMultiDayCb.onchange = () => {
-        const on = isMultiDayCb.checked;
-        singleSection.style.display = on ? 'none' : '';
-        multiSection.style.display = on ? '' : 'none';
-        if (on && dayRows.length === 0) addDayRow();
-      };
+      addResourceRow();
+      const addResourceBtn = h('button', { class: 'p3-btn small', onclick: () => addResourceRow() }, '+ Weitere Ressource');
 
-      const addRowBtn = h('button', { class: 'p3-btn small', onclick: () => addDayRow() }, '+ Spieltag');
+      // ─── VMW-Teams mit Kategorie ───────────────────────────────────
+      const teamSection = h('div', {});
+      const teamRows = [];
+      function addTeamRow(initial = {}) {
+        const codeInput = h('input', { class: 'p3-input', placeholder: 'z.B. Herren1', value: initial.code || '' });
+        const catSelect = h('select', { class: 'p3-input' });
+        for (const [code, label] of Object.entries(CATEGORY_LABELS)) {
+          const opt = h('option', { value: code }, label);
+          if (initial.category === code) opt.selected = true;
+          catSelect.appendChild(opt);
+        }
+        const removeBtn  = h('button', { class: 'p3-btn small danger', title: 'Entfernen', onclick: () => {
+          const idx = teamRows.findIndex(r => r.row === row);
+          if (idx >= 0) teamRows.splice(idx, 1);
+          row.remove();
+        }}, '×');
+        const row = h('div', { class: 'p3-multiday-row' },
+          h('div', { style: 'display:grid; grid-template-columns: 1fr 1fr auto; gap:6px; align-items:end' },
+            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Team-Code'), codeInput),
+            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Altersklasse'), catSelect),
+            removeBtn,
+          ),
+        );
+        teamRows.push({ codeInput, catSelect, row });
+        teamSection.appendChild(row);
+      }
+      const addTeamBtn = h('button', { class: 'p3-btn small', onclick: () => addTeamRow() }, '+ VMW-Team');
 
       const saveBtn = h('button', { class: 'p3-btn primary' }, 'Speichern');
       saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
@@ -1189,36 +1529,43 @@
 
         const dates = datesInput.value.split(',').map(s => s.trim()).filter(Boolean);
 
-        const multiDay = isMultiDayCb.checked;
-        let externalDays = null;
-        let externalUrl = null;
-        if (multiDay) {
-          externalDays = dayRows
-            .filter(r => r.urlInput.value.trim())
-            .map(r => ({ date: r.dateInput.value.trim(), label: r.labelInput.value.trim(), url: r.urlInput.value.trim() }));
-          if (!externalDays.length) return toast('Mindestens ein Spieltag mit URL erforderlich', 'error');
-        } else {
-          externalUrl = singleUrlInput.value.trim();
-          if (!externalUrl) return toast('URL fehlt', 'error');
-          if (!/^https?:\/\//.test(externalUrl)) return toast('URL muss mit http:// oder https:// starten', 'error');
+        // Ressourcen (optional, kein Pflichtfeld)
+        const resources = resourceRows
+          .filter(r => r.urlInput.value.trim())
+          .map(r => ({
+            title: r.titleInput.value.trim() || 'Externer Plan',
+            url:   r.urlInput.value.trim(),
+          }));
+        for (const r of resources) {
+          if (!/^https?:\/\//.test(r.url)) return toast(`URL ungültig: ${r.url}`, 'error');
         }
+
+        // VMW-Teams (für Kategorie-Pills auf der Landing)
+        const ourTeams = teamRows
+          .filter(r => r.codeInput.value.trim())
+          .map(r => ({
+            code:     r.codeInput.value.trim(),
+            name:     `VMW Berlin ${r.codeInput.value.trim()}`,
+            category: r.catSelect.value,
+          }));
 
         // Auto-Status nach Datum
         const today = new Date().toISOString().slice(0, 10);
         let status = 'active';
         if (dates.length) {
-          if (today < dates[0]) status = 'active';                 // zukünftig — trotzdem als active anzeigen
+          if (today < dates[0]) status = 'active';
           else if (today > dates[dates.length - 1]) status = 'completed';
         }
 
         const config = {
           slug, name, type: 'external',
           connector: null, showStandings: false, showHausliga: false,
-          source: null, externalUrl, externalDays,
+          source: null,
+          external: { resources },
           status, dates,
           expectedDates: null, timezone: 'Europe/Berlin',
           pendingTeamSelection: false, lastRediscoveryAt: null,
-          ourTeams: [],
+          ourTeams,
         };
 
         try {
@@ -1237,16 +1584,23 @@
       resultBox.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Tage (komma-getrennt YYYY-MM-DD)'), datesInput,
         h('div', { class: 'p3-hint' }, 'Bestimmt automatisch ob das Turnier als "aktiv" oder "beendet" angezeigt wird.')));
 
+      // Ressourcen-Section
       resultBox.appendChild(h('div', { class: 'p3-field' },
-        h('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer' },
-          isMultiDayCb,
-          h('span', {}, 'Mehrere Spieltage mit jeweils eigenem Link'),
-        ),
+        h('label', {}, 'Externer Spielplan (optional)'),
+        h('div', { class: 'p3-hint', style: 'margin-bottom:8px' },
+          'Beliebig viele Links zu externen Plänen — PDFs, Vereinsseiten, Liga-Apps. Bei mehreren Links eine eigene Zeile pro Link.'),
+        resourceSection,
+        addResourceBtn,
       ));
 
-      resultBox.appendChild(singleSection);
-      resultBox.appendChild(multiSection);
-      multiSection.appendChild(addRowBtn);
+      // VMW-Teams-Section
+      resultBox.appendChild(h('div', { class: 'p3-field' },
+        h('label', {}, 'VMW-Teams (für Kategorie-Pills auf der Landing-Page)'),
+        h('div', { class: 'p3-hint', style: 'margin-bottom:8px' },
+          'Pro VMW-Team eine Zeile: Code + Altersklasse. Wird als „Herren · U21 …" auf der Kachel angezeigt.'),
+        teamSection,
+        addTeamBtn,
+      ));
 
       resultBox.appendChild(saveBtn);
 
@@ -1630,8 +1984,281 @@
     ));
   };
 
+  // Anzeige-Labels für VMW-Team-Kategorien (intern junioren, Anzeige U21)
+  const CATEGORY_LABELS = {
+    herren: 'Herren', damen: 'Damen', junioren: 'U21', jugend: 'Jugend', schueler: 'Schüler',
+  };
+
+  // Rollen-Labels (UI)
+  const ROLE_LABELS_DISPLAY = {
+    ref1: '1. SR', ref2: '2. SR', scorer: 'Protokoll',
+    timer: 'Zeit', shotclock: 'Shotclock', line1: '1. Linie', line2: '2. Linie',
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // EXTERNAL-TOURNAMENT DASHBOARD
+  // ═══════════════════════════════════════════════════════════════════
+  //
+  // Layout:
+  //   Header (Name + Datum + Status + Trainer-Login-Button)
+  //   Ressourcen-Card(s) — externer Spielplan-Link(s)
+  //   Schiri-Einsatz-Liste (eine Card pro Spielnummer)
+  //   + Einsatz-Anlegen-Button (Trainer/Master only)
+  //
+  // Datenquelle: /api/data?slug=<slug> mit external=true.
+  window.renderExternalDashboard = async function(slug, data) {
+    window.CURRENT_SLUG = slug;
+    const cfg = data.config;
+    const referees = data.referees || [];
+    const refsById = new Map(referees.map(r => [r.id, r]));
+    const entries  = data.externalAssignments || [];
+    const resources = cfg.external?.resources || [];
+
+    const isTrainer = window.state.role === 'master' || window.state.role === 'trainer';
+
+    document.body.innerHTML = '';
+    document.body.classList.remove('p3-landing-mode');
+    document.body.classList.add('p3-page', 'p3-page-external');
+    document.body.style.visibility = 'visible';
+
+    const statusBadge = h('span', { class: `p3-status-badge p3-status-${cfg.status}` },
+      ({ active: 'live', 'awaiting-schedule': 'geplant', draft: 'draft', completed: 'beendet' }[cfg.status] || cfg.status));
+
+    const trainerBtn = isTrainer
+      ? h('button', { class: 'p3-btn small', onclick: () => window.logout() }, 'Logout')
+      : h('button', { class: 'p3-btn small', onclick: () => window.openTrainerLogin(slug) }, '🔑 Trainer-Login');
+
+    const dateStr = (cfg.dates?.[0] || '—') + (cfg.dates?.length > 1 ? ' – ' + cfg.dates.at(-1) : '');
+    const catPills = (cfg.vmwCategories || []).map(c =>
+      h('span', { class: 'p3-cat-pill' }, CATEGORY_LABELS[c] || c));
+
+    // Ressourcen-Section
+    const resourcesSection = resources.length
+      ? h('div', { class: 'p3-ext-resources' },
+          h('div', { class: 'p3-section-title' }, 'Externer Spielplan'),
+          ...resources.map(r => renderResourceCard(r)))
+      : h('div', { class: 'p3-ext-resources p3-ext-noresource' },
+          h('div', { class: 'p3-section-title' }, 'Externer Spielplan'),
+          h('div', { class: 'p3-hint' }, 'Kein externer Plan verlinkt — Schiri-Einsätze werden ausschließlich hier verwaltet.'));
+
+    // Einsatz-Section
+    const einsatzHeader = h('div', { class: 'p3-ext-einsatz-header' },
+      h('div', { class: 'p3-section-title' }, `Schiri-Einsätze (${entries.length})`),
+      isTrainer
+        ? h('button', { class: 'p3-btn primary small',
+            onclick: () => window.openExternalEntryForm(slug, null, refresh) },
+            '+ Einsatz anlegen')
+        : null,
+    );
+
+    const einsatzList = h('div', { class: 'p3-ext-einsatz-list' },
+      entries.length
+        ? entries.map(e => renderExternalEntryCard(slug, e, refsById, isTrainer, refresh))
+        : h('div', { class: 'p3-empty-soft' },
+            isTrainer
+              ? 'Noch keine Einsätze angelegt. Klicke „+ Einsatz anlegen", um zu starten.'
+              : 'Noch keine Einsätze angelegt.'));
+
+    const page = h('div', { class: 'p3-page-wrap' },
+      h('header', { class: 'p3-page-header' },
+        h('button', { class: 'p3-btn small', onclick: () => {
+          document.body.classList.remove('p3-page', 'p3-page-external');
+          window.history.pushState({}, '', '/');
+          window.renderLanding();
+        } }, '← Übersicht'),
+        h('div', { class: 'p3-page-title-wrap' },
+          h('h1', {}, cfg.name),
+          h('div', { class: 'p3-page-sub' },
+            h('span', {}, dateStr),
+            statusBadge,
+            ...catPills),
+        ),
+        trainerBtn,
+      ),
+      h('div', { class: 'p3-body' },
+        resourcesSection,
+        h('div', { class: 'p3-ext-einsatz-section' },
+          einsatzHeader,
+          einsatzList,
+          h('div', { class: 'p3-ext-footer-hint' },
+            '📝 Manuell gepflegt von Trainer/Master · Keine Verbindung zum externen Spielplan'),
+        ),
+      ),
+    );
+
+    document.body.appendChild(page);
+
+    async function refresh() {
+      const fresh = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+      window.renderExternalDashboard(slug, fresh);
+    }
+  };
+
+  // Eine Ressourcen-Card (Link zu externem PDF/Webseite)
+  function renderResourceCard(r) {
+    const isPdf = /\.pdf(\?|$)/i.test(r.url || '');
+    const icon = isPdf ? '📄' : '🔗';
+    const typeBadge = isPdf ? 'PDF' : 'Link';
+    let host = '';
+    try { host = new URL(r.url).hostname; } catch {}
+    return h('a', { class: 'p3-ext-resource-card', href: r.url, target: '_blank', rel: 'noopener noreferrer' },
+      h('span', { class: 'p3-ext-resource-icon' }, icon),
+      h('div', { class: 'p3-ext-resource-text' },
+        h('div', { class: 'p3-ext-resource-title' }, r.title || (isPdf ? 'Spielplan (PDF)' : 'Externer Plan')),
+        h('div', { class: 'p3-ext-resource-host' }, host)),
+      h('span', { class: 'p3-ext-resource-type' }, typeBadge),
+      h('span', { class: 'p3-ext-arrow' }, '↗'),
+    );
+  }
+
+  // Eine Einsatz-Card (Spielnummer + Rollen-Belegung)
+  function renderExternalEntryCard(slug, entry, refsById, isTrainer, refresh) {
+    const dateShort = entry.date ? entry.date.split('-').reverse().join('.').slice(0,5) + entry.date.slice(0,4).slice(-2) : '';
+    const klasse = entry.spielklasse
+      ? (CATEGORY_LABELS[entry.spielklasse] || entry.spielklasse)
+      : '—';
+    const myRefereeId = window.state.refereeAuth
+      ? referees_findIdByCode(window.state.refereeAuth)
+      : null;
+
+    const head = h('div', { class: 'p3-ext-entry-head' },
+      h('span', { class: 'p3-ext-entry-nr' }, `Spiel ${entry.matchNr}`),
+      h('span', { class: 'p3-ext-entry-meta' }, `${entry.date} · ${klasse}`),
+      isTrainer
+        ? h('div', { class: 'p3-ext-entry-actions' },
+            h('button', { class: 'p3-btn xsmall',
+              onclick: () => window.openExternalEntryForm(slug, entry, refresh) }, '✏️'),
+            h('button', { class: 'p3-btn xsmall danger',
+              onclick: async () => {
+                if (!confirm('Diesen Einsatz wirklich löschen?')) return;
+                try {
+                  await api(`/api/admin/t/${slug}/external-entries/${entry.id}`, { method: 'DELETE' });
+                  await refresh();
+                } catch (e) { toast('Fehler: ' + e.message, 'error'); }
+              } }, '🗑️'))
+        : null,
+    );
+
+    const roleGrid = h('div', { class: 'p3-ext-entry-roles' });
+    const visibleRoles = ['ref1', 'ref2', 'scorer', 'timer', 'line1'];
+    for (const code of visibleRoles) {
+      const refId = entry.roles?.[code];
+      const ref = refId ? refsById.get(refId) : null;
+      const isMe = myRefereeId && refId === myRefereeId;
+      roleGrid.appendChild(h('div', { class: 'p3-ext-role-cell' + (isMe ? ' is-me' : '') },
+        h('div', { class: 'p3-ext-role-label' }, ROLE_LABELS_DISPLAY[code]),
+        h('div', { class: 'p3-ext-role-name' }, ref?.displayName || (refId ? '?' : '–')),
+      ));
+    }
+
+    return h('div', { class: 'p3-ext-entry-card' }, head, roleGrid,
+      entry.notes ? h('div', { class: 'p3-ext-entry-notes' }, '📝 ' + entry.notes) : null);
+  }
+
+  function referees_findIdByCode(/* code */) {
+    // Schiri-Auth liefert nur den Code, aber kein Referee-Mapping client-seitig.
+    // Highlight für eigene Einsätze erfolgt server-seitig bzw. wird hier
+    // best-effort weggelassen (würde extra Round-Trip kosten).
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // EXTERNAL ENTRY-FORM (anlegen + bearbeiten)
+  // ═══════════════════════════════════════════════════════════════════
+  window.openExternalEntryForm = async function(slug, existing, refresh) {
+    // Schiri-Liste für Picker laden (cached via data.referees ggf.)
+    let referees = window.state.externalReferees;
+    if (!referees) {
+      try {
+        const data = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+        referees = data.referees || [];
+        window.state.externalReferees = referees;
+      } catch { referees = []; }
+    }
+
+    const isEdit = !!existing;
+    const init = existing || { matchNr: '', date: '', spielklasse: 'herren', roles: {}, notes: '' };
+    const modal = h('div', { class: 'p3-modal-bg', onclick: (e) => { if (e.target === e.currentTarget) closeModal(); } });
+    const card = h('div', { class: 'p3-modal-card' });
+    modal.appendChild(card);
+
+    card.appendChild(h('h2', {}, isEdit ? 'Einsatz bearbeiten' : 'Einsatz anlegen'));
+
+    const matchNrInput = h('input', { type: 'text', placeholder: 'z.B. 12', value: init.matchNr });
+    const dateInput    = h('input', { type: 'date', value: init.date });
+    const klasseSelect = h('select', {});
+    for (const [code, label] of Object.entries(CATEGORY_LABELS)) {
+      const opt = h('option', { value: code }, label);
+      if (init.spielklasse === code) opt.selected = true;
+      klasseSelect.appendChild(opt);
+    }
+
+    card.appendChild(formRow('Spiel-Nr.', matchNrInput));
+    card.appendChild(formRow('Datum', dateInput));
+    card.appendChild(formRow('Spielklasse', klasseSelect));
+
+    // Rollen-Picker
+    card.appendChild(h('div', { class: 'p3-section-title' }, 'Rollen-Belegung'));
+    const roleSelects = {};
+    const allRoles = ['ref1', 'ref2', 'scorer', 'timer', 'shotclock', 'line1', 'line2'];
+    for (const code of allRoles) {
+      const sel = h('select', {});
+      sel.appendChild(h('option', { value: '' }, '— nicht besetzt —'));
+      for (const r of referees) {
+        const opt = h('option', { value: r.id }, r.displayName + ' (' + (r.level || '?') + ')');
+        if (init.roles?.[code] === r.id) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      roleSelects[code] = sel;
+      card.appendChild(formRow(ROLE_LABELS_DISPLAY[code], sel));
+    }
+
+    const notesInput = h('input', { type: 'text', placeholder: 'optional', value: init.notes || '' });
+    card.appendChild(formRow('Bemerkung', notesInput));
+
+    const actions = h('div', { class: 'p3-modal-actions' });
+    actions.appendChild(h('button', { class: 'p3-btn', onclick: () => closeModal() }, 'Abbrechen'));
+    const saveBtn = h('button', { class: 'p3-btn primary' }, isEdit ? 'Speichern' : 'Anlegen');
+    saveBtn.onclick = (e) => withLoading(e.currentTarget, 'speichere …', async () => {
+      const payload = {
+        matchNr:     matchNrInput.value.trim(),
+        date:        dateInput.value,
+        spielklasse: klasseSelect.value,
+        roles:       Object.fromEntries(
+          Object.entries(roleSelects).map(([k, sel]) => [k, sel.value || null]).filter(([, v]) => v)
+        ),
+        notes:       notesInput.value.trim(),
+      };
+      try {
+        if (isEdit) {
+          await api(`/api/admin/t/${slug}/external-entries/${existing.id}`, {
+            method: 'PUT', body: JSON.stringify(payload),
+          });
+        } else {
+          await api(`/api/admin/t/${slug}/external-entries`, {
+            method: 'POST', body: JSON.stringify(payload),
+          });
+        }
+        closeModal();
+        await refresh();
+      } catch (err) {
+        toast('Fehler: ' + err.message, 'error');
+      }
+    });
+    actions.appendChild(saveBtn);
+    card.appendChild(actions);
+
+    document.body.appendChild(modal);
+  };
+
+  function formRow(label, control) {
+    return h('label', { class: 'p3-formrow' },
+      h('span', { class: 'p3-formrow-label' }, label),
+      control);
+  }
+
   function renderTournamentCard(t) {
-    const isExternal = t.type === 'external' && (t.externalUrl || (t.externalDays && t.externalDays.length));
+    const isExternal = t.type === 'external';
     const status = t.status;
     const statusBadgeText = {
       'active': 'live', 'awaiting-schedule': 'geplant', 'draft': 'draft', 'completed': 'beendet'
@@ -1639,38 +2266,35 @@
     const meta = (t.dates?.[0] || t.expectedDates?.[0] || '—') +
                  (t.dates?.length > 1 ? ` – ${t.dates.at(-1)}` : '');
 
-    // Externes Turnier mit Multi-Day-Linkliste
-    if (isExternal && Array.isArray(t.externalDays) && t.externalDays.length) {
-      const card = h('div', { class: 'p3-tcard p3-tcard-external' },
-        h('div', { class: 'p3-tcard-name' }, t.name,
-          h('span', { class: `p3-status-badge p3-status-${status}` }, statusBadgeText)),
-        h('div', { class: 'p3-tcard-meta' }, meta),
-        h('div', { class: 'p3-tcard-days' },
-          ...t.externalDays.map(d => h('a', {
-            class: 'p3-day-link', href: d.url, target: '_blank', rel: 'noopener noreferrer'
-          }, h('span', { class: 'p3-day-date' }, d.date || ''),
-             h('span', { class: 'p3-day-label' }, d.label || ''),
-             h('span', { class: 'p3-ext-arrow' }, '↗')))
-        ),
-      );
-      return card;
-    }
+    // Top-Badge: signalisiert App-Turnier vs Externer Plan
+    const topBadge = isExternal
+      ? h('span', { class: 'p3-typebadge p3-typebadge-external' }, '🔗 Externer Plan')
+      : h('span', { class: 'p3-typebadge p3-typebadge-live' }, '📊 Live-Spielplan');
 
-    // External-Turnier mit single URL → ein Link
-    if (isExternal) {
-      return h('a', { class: 'p3-tcard p3-tcard-external', href: t.externalUrl, target: '_blank', rel: 'noopener noreferrer' },
-        h('div', { class: 'p3-tcard-name' }, t.name,
-          h('span', { class: `p3-status-badge p3-status-${status}` }, statusBadgeText),
-          h('span', { class: 'p3-ext-badge' }, '↗ extern')),
-        h('div', { class: 'p3-tcard-meta' }, meta),
-      );
-    }
+    // VMW-Team-Pills (z.B. "Herren · U21 · Damen")
+    const categoryPills = (t.vmwCategories || []).length
+      ? h('div', { class: 'p3-tcard-categories' },
+          ...(t.vmwCategories || []).map(c =>
+            h('span', { class: 'p3-cat-pill' }, CATEGORY_LABELS[c] || c)))
+      : null;
 
-    // Normales Turnier
-    return h('a', { class: 'p3-tcard', href: `/t/${t.slug}` },
-      h('div', { class: 'p3-tcard-name' }, t.name,
-        h('span', { class: `p3-status-badge p3-status-${status}` }, statusBadgeText)),
+    // Beide Card-Typen klicken auf /t/<slug> → Dashboard / Live-View
+    // (Externe Card hat dort dann den prominenten Externer-Link)
+    const cardClass = isExternal ? 'p3-tcard p3-tcard-external' : 'p3-tcard p3-tcard-live';
+    return h('a', { class: cardClass, href: `/t/${t.slug}` },
+      topBadge,
+      h('div', { class: 'p3-tcard-name' }, t.name),
       h('div', { class: 'p3-tcard-meta' }, meta),
+      categoryPills,
+      h('div', { class: 'p3-tcard-footer' },
+        h('span', { class: `p3-status-badge p3-status-${status}` }, statusBadgeText),
+        isExternal
+          ? h('span', { class: 'p3-tcard-hint' },
+              t.externalResourceCount > 0
+                ? `${t.externalResourceCount} Ressource${t.externalResourceCount === 1 ? '' : 'n'} + Einsätze`
+                : 'Schiri-Einsätze')
+          : h('span', { class: 'p3-tcard-hint' }, 'Spielplan öffnen →'),
+      ),
     );
   }
 
@@ -1729,10 +2353,26 @@
       return;
     }
 
-    // /t/<slug> — app.js rendert die Tournament-View. Sichtbarkeit wird in app.js
-    // beim ersten erfolgreichen Render gesetzt (siehe dort: showAppBody()).
-    // Falls app.js aus irgendeinem Grund nicht startet (z.B. kein Slug erkannt),
-    // sichtbar machen als Fallback:
+    // /t/<slug> — Tournament-View
+    //   - Für External-Turniere: phase3.js übernimmt und rendert Dashboard
+    //   - Sonst: app.js rendert die Live-Spielplan-View
+    const tMatch = pathname.match(/^\/t\/([^/]+)/);
+    if (tMatch) {
+      const slug = decodeURIComponent(tMatch[1]);
+      // Async type-check; falls external → übernehmen, sonst app.js lassen
+      fetch(`/api/data?slug=${encodeURIComponent(slug)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data?.external) {
+            window.renderExternalDashboard(slug, data);
+          }
+          // Sonst: app.js läuft eh, der zeigt body wenn fertig
+        })
+        .catch(() => { /* app.js bleibt der Default-Pfad */ });
+      setTimeout(showBody, 300);
+      return;
+    }
+
     setTimeout(showBody, 300);
   }
 

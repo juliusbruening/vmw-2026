@@ -37,7 +37,12 @@ import {
 import { detectConnector, getConnector } from '../../scraper/connectors/index.mjs';
 import { ROLES, REFEREE_LEVELS, canAssignRole } from '../../lib/refereeLevels.mjs';
 import { buildSnapshot } from '../../scraper/index.mjs';
-import { aggregateReferees, refereesToCsv } from '../../lib/reports.mjs';
+import { aggregateReferees, refereesToCsv, detailEntriesToCsv } from '../../lib/reports.mjs';
+import {
+  listExternalAssignments, getExternalAssignment,
+  createExternalAssignment, updateExternalAssignment, deleteExternalAssignment,
+} from '../../lib/externalAssignments.mjs';
+import { buildEinsatzbogenForReferee } from '../../lib/einsatzbogen.mjs';
 
 const STORE_NAME = 'tournaments';
 const ASSIGNMENTS_KEY = (slug) => `${slug}/assignments.json`;
@@ -81,6 +86,20 @@ export default async (req) => {
     return await handleAssignment(req, assignMatch[1], Number(assignMatch[2]));
   }
 
+  // ── Phase-7 Externe Einsätze (Trainer + Master) ────────────────────
+  const extListMatch = path.match(/^t\/([a-z0-9-]+)\/external-entries$/i);
+  if (extListMatch) {
+    if (!isTrainerOrMaster(role)) return forbidden();
+    if (req.method === 'GET')  return await handleListExternal(extListMatch[1]);
+    if (req.method === 'POST') return await handleCreateExternal(req, extListMatch[1], role);
+  }
+  const extItemMatch = path.match(/^t\/([a-z0-9-]+)\/external-entries\/([a-z0-9-]+)$/i);
+  if (extItemMatch) {
+    if (!isTrainerOrMaster(role)) return forbidden();
+    if (req.method === 'PUT')    return await handleUpdateExternal(req, extItemMatch[1], extItemMatch[2]);
+    if (req.method === 'DELETE') return await handleDeleteExternal(extItemMatch[1], extItemMatch[2]);
+  }
+
   // ── Master-only ab hier ────────────────────────────────────────────
   if (!isMaster(role)) return forbidden();
 
@@ -108,9 +127,14 @@ export default async (req) => {
   if (codeMatch && req.method === 'POST')                         return await handleGenerateCode(codeMatch[1]);
   if (codeMatch && req.method === 'DELETE')                       return await handleRevokeCode(codeMatch[1]);
 
+  // DKV-PDF-Einsatzbogen pro Schiri (zentral durch Master)
+  const pdfMatch = path.match(/^referees\/([a-z0-9-]+)\/pdf-einsatzbogen$/i);
+  if (pdfMatch && req.method === 'GET') return await handleRefereePdf(pdfMatch[1], url);
+
   // Reports
-  if (req.method === 'GET' && path === 'reports/referees')        return await handleReport(url, 'json');
-  if (req.method === 'GET' && path === 'reports/referees.csv')    return await handleReport(url, 'csv');
+  if (req.method === 'GET' && path === 'reports/referees')          return await handleReport(url, 'json');
+  if (req.method === 'GET' && path === 'reports/referees.csv')      return await handleReport(url, 'csv');
+  if (req.method === 'GET' && path === 'reports/entries.csv')       return await handleDetailReport(url);
 
   return notFound();
 };
@@ -411,6 +435,18 @@ async function handleRevokeCode(id) {
   return jsonResponse({ ok: true, id, revoked: true });
 }
 
+async function handleDetailReport(url) {
+  const year = Number(url.searchParams.get('year') || new Date().getFullYear());
+  const csv = await detailEntriesToCsv(year);
+  return new Response(csv, {
+    status: 200,
+    headers: {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="einsaetze-detail-${year}.csv"`,
+    },
+  });
+}
+
 async function handleReport(url, format) {
   const year = url.searchParams.get('year') || String(new Date().getFullYear());
   const aggregation = await aggregateReferees({ year: Number(year) });
@@ -425,4 +461,61 @@ async function handleReport(url, format) {
     });
   }
   return jsonResponse({ ok: true, year: Number(year), ...aggregation });
+}
+
+// ─── Externe Schiri-Einsätze (Trainer + Master) ──────────────────────────────
+
+async function handleListExternal(slug) {
+  const tournament = await getTournament(slug);
+  if (!tournament) return notFound();
+  const entries = await listExternalAssignments(slug);
+  return jsonResponse({ ok: true, entries });
+}
+
+async function handleCreateExternal(req, slug, role) {
+  const tournament = await getTournament(slug);
+  if (!tournament) return notFound();
+  let body; try { body = await req.json(); } catch { body = null; }
+  try {
+    const createdBy = typeof role === 'string' ? role : 'self';
+    const entry = await createExternalAssignment(slug, body || {}, { createdBy });
+    return jsonResponse({ ok: true, entry }, { status: 201 });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+}
+
+async function handleUpdateExternal(req, slug, id) {
+  let body; try { body = await req.json(); } catch { body = null; }
+  try {
+    const updated = await updateExternalAssignment(slug, id, body || {});
+    if (!updated) return notFound();
+    return jsonResponse({ ok: true, entry: updated });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+}
+
+async function handleDeleteExternal(slug, id) {
+  const ok = await deleteExternalAssignment(slug, id);
+  if (!ok) return notFound();
+  return jsonResponse({ ok: true, id, deleted: true });
+}
+
+// ─── Master-Download: DKV-PDF pro Schiri ─────────────────────────────────────
+
+async function handleRefereePdf(refereeId, url) {
+  const year = Number(url.searchParams.get('year') || new Date().getFullYear());
+  const result = await buildEinsatzbogenForReferee(refereeId, year);
+  if (!result) return notFound();
+
+  const filename = `DKV-Einsatzbogen-${result.referee.displayName || refereeId}-${year}.pdf`;
+  return new Response(result.pdfBytes, {
+    status: 200,
+    headers: {
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control':       'no-store',
+    },
+  });
 }

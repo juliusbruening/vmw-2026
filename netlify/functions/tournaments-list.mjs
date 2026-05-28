@@ -4,7 +4,7 @@
 // Public-Listing aller Tournaments für die Landing-Page.
 // Master-Login (via x-admin-password) sieht zusätzlich Drafts.
 
-import { listTournaments } from '../../lib/tournaments.mjs';
+import { listTournaments, vmwCategoriesFor } from '../../lib/tournaments.mjs';
 import { getRole, isMaster } from '../../lib/auth.mjs';
 
 export default async (req) => {
@@ -36,6 +36,11 @@ export default async (req) => {
     dates: t.dates || [],
     expectedDates: t.expectedDates || null,
     showStandings: !!t.showStandings,
+    // VMW-Teilnehmer-Kategorien (für Card-Pills)
+    vmwCategories: vmwCategoriesFor(t),
+    // External-spezifisch: Resource-Count für Hinweis "Externer Plan vorhanden"
+    externalResourceCount: Array.isArray(t.external?.resources) ? t.external.resources.length : 0,
+    // Legacy-Felder (alte Configs) — beibehalten für Backward-Compat
     externalUrl: t.externalUrl || null,
     externalDays: Array.isArray(t.externalDays) ? t.externalDays : null,
   }));
