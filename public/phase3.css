@@ -220,7 +220,7 @@
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid #e5e7eb;
-  background: #0E7C3A; color: white;
+  background: #C8102E; color: white;     /* VMW-Rot — Standard für alle Page-Header */
 }
 .p3-page-header h1 { margin: 0; font-size: 16px; flex: 1; text-align: center; }
 .p3-page-header .p3-btn { background: rgba(255,255,255,0.15); color: white; border-color: transparent; }

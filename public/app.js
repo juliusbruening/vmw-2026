@@ -363,17 +363,18 @@ function save(k,v){ localStorage.setItem('vmw.'+k, v); }
 // State global verfügbar machen, damit phase3.js (Picker, Profil, Master-Admin) darauf zugreifen kann.
 window.state = state;
 function todayTournamentDay(){
-  // Tagesnummer auf Basis der Berliner Lokalzeit (sonst tickt's um Mitternacht
-  // Berlin nicht um, weil UTC erst 2h später Tageswechsel hat).
-  // Vor Turnier (≤ Fr 22.05): Default 1 (zeigt Sa-Spielplan)
-  // Während Turnier:           1 / 2 / 3 je nach Tag
-  // Nach Turnier (> Mo 25.05): 3 (zeigt Mo-Spielplan, letzter relevanter Tag)
+  // Tagesnummer auf Basis der Berliner Lokalzeit + TOURNAMENT_DATES.
+  // Vor Turnier (heute < erster Tag): Day 1
+  // Während Turnier: Index in TOURNAMENT_DATES
+  // Nach Turnier (heute > letzter Tag): letzter Tag
+  // Fallback bei fehlenden TOURNAMENT_DATES: Day 1
+  const dates = (Array.isArray(window.TOURNAMENT_DATES) ? window.TOURNAMENT_DATES : []);
+  if (!dates.length) return 1;
   const ymd = new Date().toLocaleDateString('en-CA', { timeZone:'Europe/Berlin' });
-  if (ymd === '2026-05-23') return 1;
-  if (ymd === '2026-05-24') return 2;
-  if (ymd === '2026-05-25') return 3;
-  if (ymd < '2026-05-23')   return 1;
-  return 3;
+  const idx = dates.indexOf(ymd);
+  if (idx >= 0) return idx + 1;
+  if (ymd < dates[0]) return 1;
+  return dates.length;
 }
 
 /* =========================================================
@@ -457,6 +458,27 @@ function groupByTime(list, { desc = false } = {}){
   return entries;
 }
 function refsFor(matchNr){
+  // Phase-3-Rollen-Assignments (neu) zuerst — wenn da, ins Players-Array
+  // mappen, damit die Anzeige im Live-/Plan-Tab funktioniert.
+  const rolesEntry = state.assignments?.[matchNr] || state.assignments?.[String(matchNr)];
+  if (rolesEntry?.roles) {
+    const refById = new Map((state.referees || []).map(r => [r.id, r]));
+    const ROLE_ORDER = ['ref1', 'ref2', 'scorer', 'timer', 'shotclock', 'line1', 'line2'];
+    const SHORTS = {
+      ref1: '1.SR', ref2: '2.SR', scorer: 'Prot.', timer: 'Zeit',
+      shotclock: 'Shot', line1: '1.Lin', line2: '2.Lin',
+    };
+    const players = [];
+    for (const code of ROLE_ORDER) {
+      const refId = rolesEntry.roles[code];
+      if (!refId) continue;
+      const ref = refById.get(refId);
+      const name = ref?.displayName || ref?.firstName || '?';
+      players.push(`${SHORTS[code]}: ${name}`);
+    }
+    if (players.length) return players;
+  }
+  // Fallback: Phase-1 Legacy-Refs (freie Spielernamen)
   const entry = state.refs[matchNr] || state.refs[String(matchNr)];
   return entry?.players ?? null;
 }
@@ -1149,6 +1171,12 @@ function renderActiveTab(){
   else if(state.tab==='plan') renderPlan();
   else if(state.tab==='teams') renderTeams();
   else if(state.tab==='haus') renderHausliga();
+  // Body sichtbar machen — falls noch versteckt (initialer Load).
+  // phase3.js übernimmt für /, /admin, /me/ und externe Turniere; app.js für
+  // kayakers-Spielpläne. Erst wenn wir hier rendern, ist klar dass wir's sind.
+  if (document.body.style.visibility === 'hidden') {
+    document.body.style.visibility = 'visible';
+  }
 }
 window.renderActiveTab = renderActiveTab;
 
@@ -1293,9 +1321,11 @@ async function fetchData(){
     const data = await res.json();
     // Config-Felder zuerst anwenden, damit TEAMS + TOURNAMENT_DATES für die nächste
     // Render-Iteration korrekt gefüllt sind (deriveLiveByTime nutzt TOURNAMENT_DATES).
-    // External Tournament: kein eigener Snapshot — auf die externe URL weiterleiten
-    if (data.external && data.config?.externalUrl) {
-      window.location.href = data.config.externalUrl;
+    // External Tournament: phase3.js rendert das Dashboard. App.js darf NICHT
+    // weitermachen (sonst DC-Shell-Flash). State leeren und body verstecken,
+    // damit phase3.js die Hoheit hat.
+    if (data.external) {
+      document.body.style.visibility = 'hidden';
       return;
     }
     if (data.config) applyConfigToFrontend(data.config);
@@ -1392,8 +1422,9 @@ document.getElementById('scorersMoreBtn').addEventListener('click', ()=>{
 // Auf /, /admin, /me/<code> übernimmt phase3.js komplett — siehe dort.
 if (CURRENT_SLUG) {
   setTab(state.tab);
-  // Sichtbar machen (war via inline-CSS in index.html versteckt um Flackern zu vermeiden)
-  document.body.style.visibility = 'visible';
+  // Visibility NICHT sofort — erst nach dem ersten fetchData wissen wir, ob app.js
+  // (kayakers-Spielplan) oder phase3.js (externes Dashboard) übernimmt. Wenn
+  // external: phase3.js setzt visibility. Wenn kayakers: renderActiveTab tut es.
   fetchData();
   setInterval(fetchData, POLL_INTERVAL_MS);
 }

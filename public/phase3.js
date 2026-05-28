@@ -123,6 +123,19 @@
     }
   }
 
+  // GET /api/data?slug=… mit Auth-Headern. Sendet x-admin-password und
+  // x-personal-token, damit der Server für eingeloggte User no-cache liefert
+  // und Mutationen sofort sichtbar werden. cache:'no-store' verhindert
+  // zusätzlich den Browser-Cache.
+  async function fetchData(slug) {
+    const headers = {};
+    if (window.state.adminPassword) headers['x-admin-password'] = window.state.adminPassword;
+    if (window.state.refereeAuth)   headers['x-personal-token']  = window.state.refereeAuth;
+    return fetch(`/api/data?slug=${encodeURIComponent(slug)}`, { headers, cache: 'no-store' })
+      .then(r => r.json());
+  }
+  window.fetchData = fetchData;
+
   // ─── API-Helpers ────────────────────────────────────────────────────
   async function api(path, opts={}) {
     const headers = { 'content-type': 'application/json', ...(opts.headers || {}) };
@@ -310,7 +323,7 @@
 
     let snapshot, assignments, referees, config, externalAssignments;
     try {
-      const data = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+      const data = await fetchData(slug);
       snapshot = data.snapshot;
       assignments = data.assignments || {};
       referees = data.referees || [];
@@ -330,11 +343,25 @@
 
     titleEl.textContent = `Schiri-Einteilung · ${config.name}`;
 
-    // Filter-State
+    // Filter-State — persistiert pro Turnier in localStorage
     const days = config.dates || [];
-    let activeDayIdx = 0;     // Index in days; -1 = alle Tage
-    let activeDivision = 'all';
-    let activeStatus = 'open'; // 'open' | 'all' | 'done-incomplete'
+    const filterKey = `vmw.lineup.filters.${slug}`;
+    const saved = (() => {
+      try { return JSON.parse(localStorage.getItem(filterKey) || 'null') || {}; }
+      catch { return {}; }
+    })();
+    // Wenn heutiges Datum in den Turnier-Tagen ist → auf den Tag filtern
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIdx = days.indexOf(todayIso);
+    const defaultDayIdx = todayIdx >= 0 ? todayIdx : -1;
+    let activeDayIdx = saved.activeDayIdx ?? defaultDayIdx;
+    let activeDivision = saved.activeDivision ?? 'all';
+    let activeStatus = saved.activeStatus ?? 'all';     // default: alle Einsätze (statt nur 'open')
+    function persistFilters() {
+      try {
+        localStorage.setItem(filterKey, JSON.stringify({ activeDayIdx, activeDivision, activeStatus }));
+      } catch {}
+    }
 
     // Alle Divisionen im Snapshot — für Klassen-Filter
     const divsSeen = new Map();
@@ -350,13 +377,13 @@
       const dayRow = h('div', { class: 'p3-filter-row' });
       dayRow.appendChild(h('span', { class: 'p3-flabel' }, 'Tag:'));
       const allDaysBtn = h('button', { class: 'p3-pillchoice ' + (activeDayIdx === -1 ? 'active' : '') }, 'Alle');
-      allDaysBtn.onclick = () => { activeDayIdx = -1; renderFilters(); renderMatches(); };
+      allDaysBtn.onclick = () => { activeDayIdx = -1; persistFilters(); renderFilters(); renderMatches(); };
       dayRow.appendChild(allDaysBtn);
       days.forEach((iso, i) => {
         const d = new Date(iso + 'T12:00:00+02:00');
         const label = d.toLocaleDateString('de-DE', { weekday:'short', day:'numeric', month:'short' });
         const btn = h('button', { class: 'p3-pillchoice ' + (activeDayIdx === i ? 'active' : '') }, label);
-        btn.onclick = () => { activeDayIdx = i; renderFilters(); renderMatches(); };
+        btn.onclick = () => { activeDayIdx = i; persistFilters(); renderFilters(); renderMatches(); };
         dayRow.appendChild(btn);
       });
       filtersBar.appendChild(dayRow);
@@ -366,13 +393,13 @@
         const divRow = h('div', { class: 'p3-filter-row' });
         divRow.appendChild(h('span', { class: 'p3-flabel' }, 'Klasse:'));
         const allBtn = h('button', { class: 'p3-pillchoice ' + (activeDivision === 'all' ? 'active' : '') }, 'Alle');
-        allBtn.onclick = () => { activeDivision = 'all'; renderFilters(); renderMatches(); };
+        allBtn.onclick = () => { activeDivision = 'all'; persistFilters(); renderFilters(); renderMatches(); };
         divRow.appendChild(allBtn);
         const order = ['U14','U16','U21','Women','Men1','Men2'];
         const sorted = [...divsSeen.entries()].sort((a,b) => (order.indexOf(a[0]) - order.indexOf(b[0])));
         sorted.forEach(([code, label]) => {
           const btn = h('button', { class: 'p3-pillchoice ' + (activeDivision === code ? 'active' : '') }, label);
-          btn.onclick = () => { activeDivision = code; renderFilters(); renderMatches(); };
+          btn.onclick = () => { activeDivision = code; persistFilters(); renderFilters(); renderMatches(); };
           divRow.appendChild(btn);
         });
         filtersBar.appendChild(divRow);
@@ -388,7 +415,7 @@
       ];
       statusOptions.forEach(([k, label]) => {
         const btn = h('button', { class: 'p3-pillchoice ' + (activeStatus === k ? 'active' : '') }, label);
-        btn.onclick = () => { activeStatus = k; renderFilters(); renderMatches(); };
+        btn.onclick = () => { activeStatus = k; persistFilters(); renderFilters(); renderMatches(); };
         statusRow.appendChild(btn);
       });
       filtersBar.appendChild(statusRow);
@@ -465,7 +492,7 @@
     }
 
     async function refreshManual() {
-      const fresh = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+      const fresh = await fetchData(slug);
       externalAssignments = fresh.externalAssignments || [];
       renderMatches();
     }
@@ -912,19 +939,22 @@
           input,
         );
       }),
-      h('button', {
-        class: 'p3-btn primary',
-        onclick: async () => {
+      (() => {
+        const btn = h('button', { class: 'p3-btn primary' }, 'Stammdaten speichern');
+        btn.onclick = () => withLoading(btn, 'Speichere …', async () => {
           const patch = {};
           for (const [key] of fields) patch[key] = inputs[key].value;
           try {
             await api('/api/me/profile', { method: 'PUT', body: JSON.stringify(patch) });
             toast('Stammdaten gespeichert', 'success');
+            // Profil neu rendern, damit "unvollständig"-Badge + Banner aktualisiert werden
+            await window.openMyProfile();
           } catch (e) {
             toast('Fehler: ' + e.message, 'error');
           }
-        },
-      }, 'Stammdaten speichern'),
+        });
+        return btn;
+      })(),
     );
     return [form];
   }
@@ -962,6 +992,24 @@
       inputs[name] = el;
       return h('div', { class: 'p3-field' }, h('label', {}, label), el);
     }
+    const saveBtn = h('button', { class: 'p3-btn primary' }, 'Speichern');
+    saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
+      const body = {};
+      for (const k of Object.keys(inputs)) body[k] = inputs[k].value;
+      // Client-seitige Mindestvalidierung — sonst Fehler erst spät vom Server
+      if (!body.tournamentName?.trim())  return toast('Veranstaltung fehlt', 'error');
+      if (!body.tournamentDate)           return toast('Datum fehlt', 'error');
+      try {
+        await api('/api/me/manual-entry', { method: 'POST', body: JSON.stringify(body) });
+        // Modal IMMER schließen — auch wenn openMyProfile gleich noch hängt
+        closeModal();
+        toast('Eintrag gespeichert', 'success');
+        // Profil neu laden, damit der Eintrag direkt sichtbar ist
+        await window.openMyProfile();
+      } catch (e) {
+        toast('Fehler: ' + e.message, 'error');
+      }
+    });
     const content = h('div', { class: 'p3-modal-content' },
       h('div', { class: 'p3-modal-h' },
         h('h3', {}, 'Manuellen Einsatz ergänzen'),
@@ -972,22 +1020,7 @@
         input('matchNr', 'Spiel-Nr. *', { placeholder: 'z.B. 42' }),
         select('role', 'Funktion *', ROLES.map(r => ({ value: r.code, label: r.label }))),
         input('notes', 'Bemerkung (optional)'),
-        h('button', {
-          class: 'p3-btn primary',
-          onclick: async () => {
-            try {
-              const body = {};
-              for (const k of Object.keys(inputs)) body[k] = inputs[k].value;
-              // matchNr als String hinterlegen, weil DKV-Bogen das so erwartet
-              await api('/api/me/manual-entry', { method: 'POST', body: JSON.stringify(body) });
-              toast('Eintrag gespeichert', 'success');
-              closeModal();
-              window.openMyProfile();
-            } catch (e) {
-              toast('Fehler: ' + e.message, 'error');
-            }
-          },
-        }, 'Speichern'),
+        saveBtn,
       ),
     );
     openModal(content);
@@ -1040,6 +1073,9 @@
           const scrapeBtn = h('button', { class: 'p3-btn small' }, '🔄 Scrape');
           scrapeBtn.onclick = () => withLoading(scrapeBtn, 'Scrape …', () => quickScrape(t.slug));
 
+          const editBtn = h('button', { class: 'p3-btn small', title: 'Turnier bearbeiten' }, '✏️ Edit');
+          editBtn.onclick = () => openTournamentEdit(t, render);
+
           const deleteBtn = h('button', { class: 'p3-btn small danger', title: 'Turnier löschen' }, '🗑');
           deleteBtn.onclick = () => withLoading(deleteBtn, '', async () => {
             if (!confirm(`Turnier "${t.name}" wirklich löschen?\nSnapshot + alle Einteilungen werden ebenfalls entfernt.`)) return;
@@ -1050,12 +1086,17 @@
             } catch (e) { toast('Löschen fehlgeschlagen: ' + e.message, 'error'); }
           });
 
+          const datesStr = (t.dates || []).length
+            ? formatDateRange(t.dates)
+            : '—';
+
           body.appendChild(h('div', { class: 'p3-admin-row' },
             h('div', {},
               h('strong', {}, t.name),
-              h('div', { class: 'p3-hint' }, `${t.status} · ${t.connector || (t.type === 'external' ? 'extern' : '—')} · ${(t.dates || []).length} Tage · ${t.slug}`)
+              h('div', { class: 'p3-hint' }, `${datesStr} · ${t.status} · ${t.connector || (t.type === 'external' ? 'extern' : '—')} · ${t.slug}`)
             ),
             h('div', { class: 'p3-row-actions' },
+              editBtn,
               t.type === 'external' ? null : scrapeBtn,
               h('select', {
                 class: 'p3-input small',
@@ -1091,20 +1132,11 @@
             codeBtn.onclick = () => withLoading(codeBtn, 'Generiere …', () => generateCode(r.id));
             actions.push(codeBtn);
 
-            // DKV-PDF zentral durch Master herunterladen
-            const pdfBtn = h('button', {
-              class: 'p3-btn small',
-              title: 'DKV-Einsatzbogen für ' + r.displayName + ' herunterladen',
-            }, '📄 PDF');
-            pdfBtn.onclick = () => withLoading(pdfBtn, 'PDF wird erstellt …', async () => {
-              const year = new Date().getFullYear();
-              const safeName = (r.displayName || r.firstName || 'schiri').replace(/[^a-z0-9-]/gi, '_');
-              await window.downloadFile(
-                `/api/admin/referees/${r.id}/pdf-einsatzbogen?year=${year}`,
-                `DKV-Einsatzbogen-${safeName}-${year}.pdf`,
-              );
-            });
-            actions.push(pdfBtn);
+            // DKV-PDF lädt der Schiri jetzt selbst über sein Profil herunter —
+            // wir haben den Master-Bulk-Download bewusst entfernt, damit klar
+            // bleibt: die Verantwortung für die eigene Einsatz-Übersicht liegt
+            // beim Schiri. Master-Endpoint `/api/admin/referees/<id>/pdf-...`
+            // bleibt für Edge-Cases (z.B. abwesender Schiri) im Backend bestehen.
 
             const deactivateBtn = h('button', { class: 'p3-btn small danger', title: 'Deaktivieren (Soft-Delete)' }, '🚫');
             deactivateBtn.onclick = () => withLoading(deactivateBtn, '', async () => {
@@ -1253,7 +1285,7 @@
       ];
 
       try {
-        const data = await fetch(`/api/data?slug=${encodeURIComponent(tournament.slug)}`).then(r => r.json());
+        const data = await fetchData(tournament.slug);
         const snapshot = data.snapshot;
         const assignments = data.assignments || {};
         const referees = data.referees || [];
@@ -1406,8 +1438,124 @@
   // Bekannte Connectoren — Liste passt zu scraper/connectors/index.mjs
   const KNOWN_CONNECTORS = [
     { id: 'kayakers',            label: 'kayakers.nl', supportsListing: true },
-    { id: 'bundesligaKanupolio', label: '1. Bundesliga (bundesliga.kanupolo.de)', supportsListing: false },
+    // Bundesliga läuft als externes Turnier — kein eigener Connector mehr nötig.
   ];
+
+  // ═══════════════════════════════════════════════════════════════════
+  // TOURNAMENT-EDIT — Modal zum Editieren eines bestehenden Turniers
+  // ═══════════════════════════════════════════════════════════════════
+  //
+  // Editierbare Felder (für alle Typen):
+  //   - Name, Datums (komma-getrennt YYYY-MM-DD)
+  //   - showStandings, showHausliga (nur kayakers-Turniere)
+  //   - external.resources (nur externe Turniere)
+  // Slug + type sind NICHT editierbar (würden Datenintegrität brechen).
+  function openTournamentEdit(t, onSaved) {
+    const isExternal = t.type === 'external';
+    const card = h('div', { class: 'p3-modal-content' });
+
+    const nameInput  = h('input', { class: 'p3-input', value: t.name || '' });
+    const datesInput = h('input', { class: 'p3-input', value: (t.dates || []).join(', ') });
+    const standingsCb = h('input', { type: 'checkbox' });
+    if (t.showStandings) standingsCb.checked = true;
+    const hausligaCb = h('input', { type: 'checkbox' });
+    if (t.showHausliga) hausligaCb.checked = true;
+
+    // Ressourcen für externe Turniere
+    const resourceRows = [];
+    const resourceSection = h('div', {});
+    function addResRow(initial = {}) {
+      const titleInput = h('input', { class: 'p3-input', placeholder: 'z.B. Spielplan (PDF)', value: initial.title || '' });
+      const urlInput   = h('input', { class: 'p3-input', placeholder: 'https://…',          value: initial.url   || '' });
+      const removeBtn  = h('button', { class: 'p3-btn small danger', onclick: () => {
+        const idx = resourceRows.findIndex(r => r.row === row);
+        if (idx >= 0) resourceRows.splice(idx, 1);
+        row.remove();
+      }}, '×');
+      const row = h('div', { class: 'p3-multiday-row' },
+        h('div', { style: 'display:grid; grid-template-columns: 1fr 2fr auto; gap:6px; align-items:end' },
+          h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Titel'), titleInput),
+          h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'URL'),   urlInput),
+          removeBtn,
+        ),
+      );
+      resourceRows.push({ titleInput, urlInput, row });
+      resourceSection.appendChild(row);
+    }
+    if (isExternal) {
+      const existing = Array.isArray(t.external?.resources) ? t.external.resources : [];
+      if (existing.length) existing.forEach(r => addResRow(r));
+      else addResRow();
+    }
+
+    const saveBtn = h('button', { class: 'p3-btn primary' }, 'Speichern');
+    saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
+      const dates = datesInput.value.split(',').map(s => s.trim()).filter(Boolean);
+      const patch = {
+        name: nameInput.value.trim(),
+        dates,
+      };
+      if (!isExternal) {
+        patch.showStandings = !!standingsCb.checked;
+        patch.showHausliga = !!hausligaCb.checked;
+      }
+      if (isExternal) {
+        const resources = resourceRows
+          .filter(r => r.urlInput.value.trim())
+          .map(r => ({
+            title: r.titleInput.value.trim() || 'Externer Plan',
+            url:   r.urlInput.value.trim(),
+          }));
+        for (const r of resources) {
+          if (!/^https?:\/\//.test(r.url)) return toast(`URL ungültig: ${r.url}`, 'error');
+        }
+        patch.external = { resources };
+      }
+      try {
+        await api(`/api/admin/tournaments/${t.slug}`, {
+          method: 'PUT', body: JSON.stringify({ patch }),
+        });
+        toast('Änderungen gespeichert', 'success');
+        closeModal();
+        if (onSaved) await onSaved();
+      } catch (e) {
+        toast('Fehler: ' + e.message, 'error');
+      }
+    });
+
+    card.appendChild(h('div', { class: 'p3-modal-h' },
+      h('h3', {}, '✏️ Turnier bearbeiten — ' + t.slug),
+      h('button', { class: 'p3-close', onclick: closeModal }, '×'),
+    ));
+    const body = h('div', { class: 'p3-body' });
+    body.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Name'), nameInput));
+    body.appendChild(h('div', { class: 'p3-field' },
+      h('label', {}, 'Tage (komma-getrennt YYYY-MM-DD)'),
+      datesInput));
+    if (!isExternal) {
+      body.appendChild(h('div', { class: 'p3-field' },
+        h('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer' },
+          standingsCb, h('span', {}, 'Tabellen anzeigen'))));
+      body.appendChild(h('div', { class: 'p3-field' },
+        h('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer' },
+          hausligaCb, h('span', {}, 'Hausliga-Tab anzeigen'))));
+    }
+    if (isExternal) {
+      body.appendChild(h('div', { class: 'p3-field' },
+        h('label', {}, 'Ressourcen (externe Pläne, PDFs, Webseiten)'),
+        h('div', { class: 'p3-hint', style: 'margin-bottom:8px' },
+          'Werden auf der Turnier-Dashboard-Seite verlinkt.'),
+        resourceSection,
+        h('button', { class: 'p3-btn small', onclick: () => addResRow() }, '+ Weitere Ressource'),
+      ));
+    }
+    body.appendChild(h('div', { class: 'p3-hint', style: 'margin-top:12px' },
+      'Slug + Typ sind nach Anlage nicht mehr änderbar.'));
+    body.appendChild(saveBtn);
+    card.appendChild(body);
+
+    openModal(card);
+  }
 
   function openTournamentWizard() {
     const resultBox = h('div', { class: 'p3-body' });
@@ -1492,34 +1640,7 @@
       addResourceRow();
       const addResourceBtn = h('button', { class: 'p3-btn small', onclick: () => addResourceRow() }, '+ Weitere Ressource');
 
-      // ─── VMW-Teams mit Kategorie ───────────────────────────────────
-      const teamSection = h('div', {});
-      const teamRows = [];
-      function addTeamRow(initial = {}) {
-        const codeInput = h('input', { class: 'p3-input', placeholder: 'z.B. Herren1', value: initial.code || '' });
-        const catSelect = h('select', { class: 'p3-input' });
-        for (const [code, label] of Object.entries(CATEGORY_LABELS)) {
-          const opt = h('option', { value: code }, label);
-          if (initial.category === code) opt.selected = true;
-          catSelect.appendChild(opt);
-        }
-        const removeBtn  = h('button', { class: 'p3-btn small danger', title: 'Entfernen', onclick: () => {
-          const idx = teamRows.findIndex(r => r.row === row);
-          if (idx >= 0) teamRows.splice(idx, 1);
-          row.remove();
-        }}, '×');
-        const row = h('div', { class: 'p3-multiday-row' },
-          h('div', { style: 'display:grid; grid-template-columns: 1fr 1fr auto; gap:6px; align-items:end' },
-            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Team-Code'), codeInput),
-            h('div', {}, h('label', { style: 'font-size:11px; color:#6b7280' }, 'Altersklasse'), catSelect),
-            removeBtn,
-          ),
-        );
-        teamRows.push({ codeInput, catSelect, row });
-        teamSection.appendChild(row);
-      }
-      const addTeamBtn = h('button', { class: 'p3-btn small', onclick: () => addTeamRow() }, '+ VMW-Team');
-
+      // VMW-Team-Felder wurden entfernt (Kategorie-Pills auf den Kacheln sind raus).
       const saveBtn = h('button', { class: 'p3-btn primary' }, 'Speichern');
       saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
         const name = nameInput.value.trim();
@@ -1540,15 +1661,6 @@
           if (!/^https?:\/\//.test(r.url)) return toast(`URL ungültig: ${r.url}`, 'error');
         }
 
-        // VMW-Teams (für Kategorie-Pills auf der Landing)
-        const ourTeams = teamRows
-          .filter(r => r.codeInput.value.trim())
-          .map(r => ({
-            code:     r.codeInput.value.trim(),
-            name:     `VMW Berlin ${r.codeInput.value.trim()}`,
-            category: r.catSelect.value,
-          }));
-
         // Auto-Status nach Datum
         const today = new Date().toISOString().slice(0, 10);
         let status = 'active';
@@ -1565,7 +1677,7 @@
           status, dates,
           expectedDates: null, timezone: 'Europe/Berlin',
           pendingTeamSelection: false, lastRediscoveryAt: null,
-          ourTeams,
+          ourTeams: [],
         };
 
         try {
@@ -1591,15 +1703,6 @@
           'Beliebig viele Links zu externen Plänen — PDFs, Vereinsseiten, Liga-Apps. Bei mehreren Links eine eigene Zeile pro Link.'),
         resourceSection,
         addResourceBtn,
-      ));
-
-      // VMW-Teams-Section
-      resultBox.appendChild(h('div', { class: 'p3-field' },
-        h('label', {}, 'VMW-Teams (für Kategorie-Pills auf der Landing-Page)'),
-        h('div', { class: 'p3-hint', style: 'margin-bottom:8px' },
-          'Pro VMW-Team eine Zeile: Code + Altersklasse. Wird als „Herren · U21 …" auf der Kachel angezeigt.'),
-        teamSection,
-        addTeamBtn,
       ));
 
       resultBox.appendChild(saveBtn);
@@ -1940,10 +2043,11 @@
     root.appendChild(listSection);
 
     try {
-      const result = await fetch('/api/tournaments', {
-        headers: window.state.role === 'master' && window.state.adminPassword
-          ? { 'x-admin-password': window.state.adminPassword } : {},
-      }).then(r => r.json());
+      // Auth-Header senden, damit Server-Cache für eingeloggte User deaktiviert wird
+      const authHeaders = {};
+      if (window.state.adminPassword) authHeaders['x-admin-password'] = window.state.adminPassword;
+      if (window.state.refereeAuth)   authHeaders['x-personal-token']  = window.state.refereeAuth;
+      const result = await fetch('/api/tournaments', { headers: authHeaders, cache: 'no-store' }).then(r => r.json());
 
       const allTournaments = result.tournaments || [];
 
@@ -2071,6 +2175,7 @@
           const grid = h('div', { class: 'p3-card-grid', style: 'margin-top:12px' });
           groups.completed.forEach(t => grid.appendChild(renderTournamentCard(t)));
           const details = h('details', { class: 'p3-completed-details' }, summary, grid);
+          details.open = true; // default aufgeklappt — sonst wirkt die Seite leer
           listSection.appendChild(details);
         }
 
@@ -2199,7 +2304,7 @@
     document.body.appendChild(page);
 
     async function refresh() {
-      const fresh = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+      const fresh = await fetchData(slug);
       window.renderExternalDashboard(slug, fresh);
     }
   };
@@ -2280,7 +2385,7 @@
     let referees = window.state.externalReferees;
     if (!referees) {
       try {
-        const data = await fetch(`/api/data?slug=${encodeURIComponent(slug)}`).then(r => r.json());
+        const data = await fetchData(slug);
         referees = data.referees || [];
         window.state.externalReferees = referees;
       } catch { referees = []; }
@@ -2487,20 +2592,24 @@
     // /t/<slug> — Tournament-View
     //   - Für External-Turniere: phase3.js übernimmt und rendert Dashboard
     //   - Sonst: app.js rendert die Live-Spielplan-View
+    //
+    // Visibility-Strategie: Body bleibt versteckt bis entweder
+    // renderExternalDashboard (external) oder app.js's renderActiveTab (kayakers)
+    // ihre erste Render-Iteration durchhaben. So kein DC-Shell-Flash auf
+    // externen Turnieren. Fallback nach 3s: forciert Body sichtbar, falls
+    // Netzwerk hängt — User sieht dann was app.js bis dahin gerendert hat.
     const tMatch = pathname.match(/^\/t\/([^/]+)/);
     if (tMatch) {
       const slug = decodeURIComponent(tMatch[1]);
-      // Async type-check; falls external → übernehmen, sonst app.js lassen
-      fetch(`/api/data?slug=${encodeURIComponent(slug)}`)
-        .then(r => r.json())
+      fetchData(slug)
         .then(data => {
           if (data?.external) {
             window.renderExternalDashboard(slug, data);
           }
-          // Sonst: app.js läuft eh, der zeigt body wenn fertig
+          // Wenn nicht external: app.js's renderActiveTab macht body sichtbar
         })
-        .catch(() => { /* app.js bleibt der Default-Pfad */ });
-      setTimeout(showBody, 300);
+        .catch(() => { /* Fallback unten */ });
+      setTimeout(showBody, 3000);
       return;
     }
 

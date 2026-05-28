@@ -15,6 +15,7 @@ import { getStore } from '@netlify/blobs';
 import { getTournament, vmwCategoriesFor } from '../../lib/tournaments.mjs';
 import { listReferees } from '../../lib/referees.mjs';
 import { listExternalAssignments } from '../../lib/externalAssignments.mjs';
+import { getRole } from '../../lib/auth.mjs';
 
 export default async (req) => {
   try {
@@ -30,6 +31,15 @@ export default async (req) => {
       return new Response(JSON.stringify({ error: `Tournament "${slug}" nicht gefunden` }),
         { status: 404, headers: { 'content-type': 'application/json' } });
     }
+
+    // Für eingeloggte Trainer/Master/Schiri Cache aus — Mutationen sollen direkt sichtbar sein
+    const role = await getRole(req);
+    const cacheHeaders = role
+      ? { 'cache-control': 'no-store' }
+      : {
+          'cache-control': 'public, max-age=5',
+          'netlify-cdn-cache-control': 'public, s-maxage=5, stale-while-revalidate=60',
+        };
 
     const referees = await listReferees({ activeOnly: true, includeSecret: false }).catch(() => []);
 
@@ -60,8 +70,7 @@ export default async (req) => {
         status: 200,
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'public, max-age=5',
-          'netlify-cdn-cache-control': 'public, s-maxage=5, stale-while-revalidate=60',
+          ...cacheHeaders,
         },
       });
     }

@@ -45,12 +45,19 @@ export default async (req) => {
     externalDays: Array.isArray(t.externalDays) ? t.externalDays : null,
   }));
 
+  // Für eingeloggte Master/Trainer/Schiri Cache deaktivieren, damit Mutationen
+  // (löschen, Status ändern, neu anlegen) sofort sichtbar sind. Anonyme User
+  // bekommen weiterhin den CDN-Cache.
+  const isAuthed = !!role;
+  const cacheHeaders = isAuthed
+    ? { 'cache-control': 'no-store' }
+    : {
+        'cache-control': 'public, max-age=60',
+        'netlify-cdn-cache-control': 'public, s-maxage=60, stale-while-revalidate=300',
+      };
+
   return new Response(JSON.stringify({ tournaments: compact }), {
     status: 200,
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'public, max-age=60',
-      'netlify-cdn-cache-control': 'public, s-maxage=60, stale-while-revalidate=300',
-    },
+    headers: { 'content-type': 'application/json', ...cacheHeaders },
   });
 };
