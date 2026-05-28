@@ -20,8 +20,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const TEMPLATE = join(__dirname, '..', 'assets', 'dkv-einsatzbogen-vorlage.pdf');
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const TEMPLATE = join(SCRIPT_DIR, '..', 'assets', 'dkv-einsatzbogen-vorlage.pdf');
 
 const EXPECTED = {
   pageCount: 2,
