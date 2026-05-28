@@ -1925,11 +1925,15 @@
         h('img', { class: 'p3-hero-logo', src: 'https://vmw-berlin.de/wp-content/uploads/2022/06/cropped-final_logo-3.png', alt: 'VMW Berlin', onerror: 'this.style.display=\'none\'' }),
         h('div', { class: 'p3-hero-text' },
           h('h1', {}, 'VMW Berlin Live-App'),
-          h('p', {}, 'Die Vereins-App für Spielpläne, Schiri-Einteilungen und Jahres-Tracking. Familie, Freunde und Vereinsmitglieder verfolgen hier alle Turniere und Ligen, in denen VMW Berlin spielt.'),
+          h('p', {}, 'Übersicht aller Turniere und Ligen, in denen VMW Berlin spielt. Wenn möglich mit Live-Spielständen direkt in der App — sonst mit Verlinkung auf den externen Spielplan. Außerdem zentral für das Tracking der Schiri-Einsätze: Trainer pflegen die Einteilungen, jeder Schiri lädt seinen DKV-Einsatzbogen am Jahresende selbst herunter.'),
         ),
         h('div', { class: 'p3-hero-actions' }, userButton),
       ),
     ));
+
+    // ─── Status-Streifen + Jahres-Tabs (zwischen Hero und Liste) ────────
+    const statusBar = h('div', { class: 'p3-statusbar' });
+    root.appendChild(statusBar);
 
     // ─── Tournament-Liste ────────────────────────────────────────────
     const listSection = h('div', { class: 'p3-landing-list' });
@@ -1941,37 +1945,146 @@
           ? { 'x-admin-password': window.state.adminPassword } : {},
       }).then(r => r.json());
 
-      const groups = { active: [], 'awaiting-schedule': [], draft: [], completed: [] };
-      (result.tournaments || []).forEach(t => { (groups[t.status] || (groups.completed)).push(t); });
+      const allTournaments = result.tournaments || [];
 
-      const labels = {
-        active:               { icon: '🟢', title: 'Läuft gerade' },
-        'awaiting-schedule':  { icon: '📅', title: 'Geplant' },
-        draft:                { icon: '✏️',  title: 'Entwürfe' },
-        completed:            { icon: '✅', title: 'Beendet' },
+      // Jahr aus Datums extrahieren
+      const tournamentYear = (t) => {
+        const d = t.dates?.[0] || t.expectedDates?.[0];
+        return d ? Number(d.slice(0, 4)) : new Date().getFullYear();
       };
-      let anyShown = false;
-      for (const status of ['active', 'awaiting-schedule', 'draft', 'completed']) {
-        const ts = groups[status];
-        if (!ts.length) continue;
-        anyShown = true;
-        listSection.appendChild(h('h2', { class: 'p3-landing-section' },
-          h('span', {}, labels[status].icon),
-          ' ' + labels[status].title,
-          h('span', { class: 'p3-section-count' }, String(ts.length))));
+      const yearsAvailable = [...new Set(allTournaments.map(tournamentYear))].sort((a, b) => b - a);
+      const defaultYear = yearsAvailable.includes(new Date().getFullYear())
+        ? new Date().getFullYear()
+        : (yearsAvailable[0] || new Date().getFullYear());
+      let activeYear = defaultYear;
+      // "Archiv" = alles vor (defaultYear - 1). Eigene Pseudo-Auswahl.
+      const archiveYears = yearsAvailable.filter(y => y < defaultYear - 1);
 
-        const grid = h('div', { class: 'p3-card-grid' });
-        ts.forEach(t => grid.appendChild(renderTournamentCard(t)));
-        listSection.appendChild(grid);
+      function renderStatusBar() {
+        statusBar.innerHTML = '';
+
+        // Counts berechnen — entweder für aktuelles Jahr oder Archiv
+        let tsForCount;
+        if (activeYear === 'archive') {
+          tsForCount = allTournaments.filter(t => archiveYears.includes(tournamentYear(t)));
+        } else {
+          tsForCount = allTournaments.filter(t => tournamentYear(t) === activeYear);
+        }
+        const total    = tsForCount.length;
+        const active   = tsForCount.filter(t => t.status === 'active').length;
+        const finished = tsForCount.filter(t => t.status === 'completed').length;
+
+        // Stats-Block (links)
+        const yearLabel = activeYear === 'archive' ? 'Archiv' : activeYear;
+        const stats = h('div', { class: 'p3-stats-line' },
+          h('span', {}, h('strong', { class: 'p3-stat-num' }, String(total)),
+            ` Turnier${total === 1 ? '' : 'e'} ${yearLabel}`),
+          total > 0 ? h('span', { class: 'p3-stat-sep' }, '·') : null,
+          total > 0 ? h('span', {}, h('strong', { class: 'p3-stat-num live' }, String(active)),
+            ' ', active === 1 ? 'läuft gerade' : 'laufen gerade') : null,
+          finished > 0 ? h('span', { class: 'p3-stat-sep' }, '·') : null,
+          finished > 0 ? h('span', {}, h('strong', {}, String(finished)), ' beendet') : null,
+        );
+
+        // Personalisierter Button (Schiri-DKV-Bogen)
+        let personalAction = null;
+        if (window.state.refereeAuth && activeYear !== 'archive') {
+          const dlBtn = h('button', { class: 'p3-btn small primary' },
+            '📄 DKV-Bogen ' + activeYear);
+          dlBtn.onclick = (e) => withLoading(e.currentTarget, 'PDF wird erstellt …', async () => {
+            await window.downloadFile(
+              `/api/me/pdf-einsatzbogen?year=${activeYear}`,
+              `DKV-Einsatzbogen-${activeYear}.pdf`,
+            );
+          });
+          personalAction = dlBtn;
+        }
+
+        // Jahres-Tabs (rechts)
+        const tabs = h('div', { class: 'p3-yeartabs' });
+        if (yearsAvailable.length > 1) {
+          const recentYears = yearsAvailable.filter(y => y >= defaultYear - 1);
+          for (const y of recentYears) {
+            const tab = h('button', {
+              class: 'p3-yeartab' + (activeYear === y ? ' active' : ''),
+            }, String(y));
+            tab.onclick = () => { activeYear = y; renderStatusBar(); renderList(); };
+            tabs.appendChild(tab);
+          }
+          if (archiveYears.length) {
+            const archiveTab = h('button', {
+              class: 'p3-yeartab' + (activeYear === 'archive' ? ' active' : ''),
+            }, 'Archiv');
+            archiveTab.onclick = () => { activeYear = 'archive'; renderStatusBar(); renderList(); };
+            tabs.appendChild(archiveTab);
+          }
+        }
+
+        statusBar.appendChild(stats);
+        if (personalAction) statusBar.appendChild(personalAction);
+        statusBar.appendChild(tabs);
       }
 
-      if (!anyShown) {
-        listSection.appendChild(h('div', { class: 'p3-empty-state' },
-          h('div', { class: 'p3-empty-icon' }, '🏆'),
-          h('h3', {}, 'Noch keine Turniere'),
-          h('p', {}, 'Als Master kannst du oben Login klicken und ein neues Turnier anlegen.'),
-        ));
+      function renderList() {
+        listSection.innerHTML = '';
+
+        // Filtern nach aktivem Jahr / Archiv
+        let visible;
+        if (activeYear === 'archive') {
+          visible = allTournaments.filter(t => archiveYears.includes(tournamentYear(t)));
+        } else {
+          visible = allTournaments.filter(t => tournamentYear(t) === activeYear);
+        }
+
+        const groups = { active: [], 'awaiting-schedule': [], draft: [], completed: [] };
+        visible.forEach(t => { (groups[t.status] || (groups.completed)).push(t); });
+
+        const labels = {
+          active:               { icon: '🟢', title: 'Läuft gerade' },
+          'awaiting-schedule':  { icon: '📅', title: 'Geplant' },
+          draft:                { icon: '✏️',  title: 'Entwürfe' },
+          completed:            { icon: '✅', title: 'Beendet' },
+        };
+
+        let anyShown = false;
+        for (const status of ['active', 'awaiting-schedule', 'draft']) {
+          const ts = groups[status];
+          if (!ts.length) continue;
+          anyShown = true;
+          listSection.appendChild(h('h2', { class: 'p3-landing-section' },
+            h('span', {}, labels[status].icon),
+            ' ' + labels[status].title,
+            h('span', { class: 'p3-section-count' }, String(ts.length))));
+          const grid = h('div', { class: 'p3-card-grid' });
+          ts.forEach(t => grid.appendChild(renderTournamentCard(t)));
+          listSection.appendChild(grid);
+        }
+
+        // Beendet — default eingeklappt
+        if (groups.completed.length) {
+          anyShown = true;
+          const summary = h('summary', { class: 'p3-landing-section p3-landing-section-toggle' },
+            h('span', {}, labels.completed.icon),
+            ' ' + labels.completed.title,
+            h('span', { class: 'p3-section-count' }, String(groups.completed.length)),
+            h('span', { class: 'p3-toggle-hint' }, ' (klick zum Aufklappen)'));
+          const grid = h('div', { class: 'p3-card-grid', style: 'margin-top:12px' });
+          groups.completed.forEach(t => grid.appendChild(renderTournamentCard(t)));
+          const details = h('details', { class: 'p3-completed-details' }, summary, grid);
+          listSection.appendChild(details);
+        }
+
+        if (!anyShown) {
+          listSection.appendChild(h('div', { class: 'p3-empty-state' },
+            h('div', { class: 'p3-empty-icon' }, '🏆'),
+            h('h3', {}, 'Keine Turniere in ' + (activeYear === 'archive' ? 'Archiv' : activeYear)),
+            h('p', {}, 'Wechsle das Jahr oben, oder leg ein neues Turnier im Master-Admin an.'),
+          ));
+        }
       }
+
+      renderStatusBar();
+      renderList();
     } catch (e) {
       listSection.appendChild(h('div', { class: 'p3-banner error' }, 'Fehler beim Laden: ' + e.message));
     }
@@ -2028,9 +2141,7 @@
       ? h('button', { class: 'p3-btn small', onclick: () => window.logout() }, 'Logout')
       : h('button', { class: 'p3-btn small', onclick: () => window.openTrainerLogin(slug) }, '🔑 Trainer-Login');
 
-    const dateStr = (cfg.dates?.[0] || '—') + (cfg.dates?.length > 1 ? ' – ' + cfg.dates.at(-1) : '');
-    const catPills = (cfg.vmwCategories || []).map(c =>
-      h('span', { class: 'p3-cat-pill' }, CATEGORY_LABELS[c] || c));
+    const dateStr = formatDateRange(cfg.dates || []);
 
     // Ressourcen-Section
     const resourcesSection = resources.length
@@ -2070,8 +2181,7 @@
           h('h1', {}, cfg.name),
           h('div', { class: 'p3-page-sub' },
             h('span', {}, dateStr),
-            statusBadge,
-            ...catPills),
+            statusBadge),
         ),
         trainerBtn,
       ),
@@ -2257,26 +2367,48 @@
       control);
   }
 
+  // Formatiert ein Array von ISO-Datumsstrings als deutsches Range:
+  //   ['2026-05-23','2026-05-24','2026-05-25'] → '23.–25. Mai 2026'
+  //   ['2026-06-14','2026-06-15']               → '14.–15. Juni 2026'
+  //   ['2026-09-12']                            → '12. September 2026'
+  //   []                                        → '—'
+  function formatDateRange(dates) {
+    if (!dates || !dates.length) return '—';
+    const MONTHS = ['Januar','Februar','März','April','Mai','Juni',
+                    'Juli','August','September','Oktober','November','Dezember'];
+    const parse = (iso) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+      return m ? { y: +m[1], m: +m[2], d: +m[3] } : null;
+    };
+    const first = parse(dates[0]);
+    const last  = parse(dates[dates.length - 1]);
+    if (!first) return dates[0] || '—';
+    if (!last || dates.length === 1) return `${first.d}. ${MONTHS[first.m-1]} ${first.y}`;
+
+    // Gleicher Monat + Jahr → "23.–25. Mai 2026"
+    if (first.m === last.m && first.y === last.y) {
+      return `${first.d}.–${last.d}. ${MONTHS[first.m-1]} ${first.y}`;
+    }
+    // Gleiches Jahr, verschiedene Monate → "30. Mai – 2. Juni 2026"
+    if (first.y === last.y) {
+      return `${first.d}. ${MONTHS[first.m-1]} – ${last.d}. ${MONTHS[last.m-1]} ${first.y}`;
+    }
+    // Verschiedene Jahre
+    return `${first.d}. ${MONTHS[first.m-1]} ${first.y} – ${last.d}. ${MONTHS[last.m-1]} ${last.y}`;
+  }
+
   function renderTournamentCard(t) {
     const isExternal = t.type === 'external';
     const status = t.status;
     const statusBadgeText = {
       'active': 'live', 'awaiting-schedule': 'geplant', 'draft': 'draft', 'completed': 'beendet'
     }[status] || status;
-    const meta = (t.dates?.[0] || t.expectedDates?.[0] || '—') +
-                 (t.dates?.length > 1 ? ` – ${t.dates.at(-1)}` : '');
+    const meta = formatDateRange(t.dates?.length ? t.dates : (t.expectedDates || []));
 
     // Top-Badge: signalisiert App-Turnier vs Externer Plan
     const topBadge = isExternal
       ? h('span', { class: 'p3-typebadge p3-typebadge-external' }, '🔗 Externer Plan')
       : h('span', { class: 'p3-typebadge p3-typebadge-live' }, '📊 Live-Spielplan');
-
-    // VMW-Team-Pills (z.B. "Herren · U21 · Damen")
-    const categoryPills = (t.vmwCategories || []).length
-      ? h('div', { class: 'p3-tcard-categories' },
-          ...(t.vmwCategories || []).map(c =>
-            h('span', { class: 'p3-cat-pill' }, CATEGORY_LABELS[c] || c)))
-      : null;
 
     // Beide Card-Typen klicken auf /t/<slug> → Dashboard / Live-View
     // (Externe Card hat dort dann den prominenten Externer-Link)
@@ -2285,7 +2417,6 @@
       topBadge,
       h('div', { class: 'p3-tcard-name' }, t.name),
       h('div', { class: 'p3-tcard-meta' }, meta),
-      categoryPills,
       h('div', { class: 'p3-tcard-footer' },
         h('span', { class: `p3-status-badge p3-status-${status}` }, statusBadgeText),
         isExternal
