@@ -32,10 +32,12 @@ export default async (req) => {
         { status: 404, headers: { 'content-type': 'application/json' } });
     }
 
-    // Für eingeloggte Trainer/Master/Schiri Cache aus — Mutationen sollen direkt sichtbar sein
+    // Für eingeloggte User: Browser-Cache kurz (5s), CDN aus → schnelle Tab-Wechsel
+    // ohne dass Mutationen länger als 5s veraltet sind. Explizite Re-Fetches
+    // umgehen den Browser-Cache mit cache:'no-store' im fetch().
     const role = await getRole(req);
     const cacheHeaders = role
-      ? { 'cache-control': 'no-store' }
+      ? { 'cache-control': 'private, max-age=5' }
       : {
           'cache-control': 'public, max-age=5',
           'netlify-cdn-cache-control': 'public, s-maxage=5, stale-while-revalidate=60',

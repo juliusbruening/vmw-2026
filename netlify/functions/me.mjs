@@ -40,7 +40,10 @@ export default async (req) => {
     const ref = await getReferee(refereeId);
     if (!ref) return notFound();
     const { loginCode, notes, ...publicView } = ref;
-    return jsonResponse({ ok: true, referee: publicView });
+    return new Response(JSON.stringify({ ok: true, referee: publicView }), {
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'private, max-age=5' },
+    });
   }
 
   if (req.method === 'PUT' && path === 'profile') {
@@ -61,7 +64,7 @@ export default async (req) => {
       listAutoEntriesForReferee(refereeId, year),
     ]);
     const bucket = agg.byReferee?.[refereeId];
-    return jsonResponse({
+    return new Response(JSON.stringify({
       ok: true,
       year,
       stats: bucket
@@ -69,6 +72,9 @@ export default async (req) => {
         : { totalGames: 0, byRole: {}, byTournament: [] },
       autoEntries: autoDetails,
       manualEntries: manual,
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json', 'cache-control': 'private, max-age=5' },
     });
   }
 

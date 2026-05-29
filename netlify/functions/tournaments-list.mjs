@@ -45,12 +45,13 @@ export default async (req) => {
     externalDays: Array.isArray(t.externalDays) ? t.externalDays : null,
   }));
 
-  // Für eingeloggte Master/Trainer/Schiri Cache deaktivieren, damit Mutationen
-  // (löschen, Status ändern, neu anlegen) sofort sichtbar sind. Anonyme User
-  // bekommen weiterhin den CDN-Cache.
+  // Für eingeloggte User: Browser-Cache kurz (5s), CDN aus → schnelle Tab-Wechsel
+  // ohne dass Mutationen länger als 5s alt sind. Mutationen + expliziter Re-Fetch
+  // umgehen den Browser-Cache mit `cache:'no-store'` im fetch().
+  // Anonyme User bekommen langen CDN-Cache (60s) für Skalierung.
   const isAuthed = !!role;
   const cacheHeaders = isAuthed
-    ? { 'cache-control': 'no-store' }
+    ? { 'cache-control': 'private, max-age=5' }
     : {
         'cache-control': 'public, max-age=60',
         'netlify-cdn-cache-control': 'public, s-maxage=60, stale-while-revalidate=300',

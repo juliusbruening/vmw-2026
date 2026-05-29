@@ -644,6 +644,24 @@ function renderLive(){
     setLiveSections([], [], [], []);
     return;
   }
+  // Empty-Snapshot-Fallback: kayakers-Turnier ohne Spielplan → friendly Hinweis
+  // statt leere Listen, plus Link zur Schiri-Einteilung (Hybrid-Modus).
+  if (!state.snapshot.matches || state.snapshot.matches.length === 0) {
+    const live = document.getElementById('liveLive');
+    const next = document.getElementById('liveNext');
+    if (live) {
+      live.innerHTML = '<div style="padding:24px;background:#fff;border:1px dashed #d1d5db;border-radius:12px;text-align:center;color:#6b7280;font-size:13px">'
+        + '<div style="font-size:32px;margin-bottom:8px">📋</div>'
+        + '<div style="font-weight:500;color:#111;margin-bottom:4px">Spielplan steht noch nicht</div>'
+        + '<div style="font-size:12px">Wir checken regelmäßig, ob kayakers den Plan veröffentlicht hat. '
+        + 'Du kannst trotzdem schon Schiri-Einsätze manuell pflegen.</div>'
+        + '<button class="p3-btn primary" style="margin-top:12px" onclick="window.openTournamentLineup && window.openTournamentLineup(window.CURRENT_SLUG)">'
+        + '→ Zur Schiri-Einteilung</button>'
+        + '</div>';
+    }
+    if (next) next.innerHTML = '';
+    return;
+  }
   // Im Beamer-Modus immer auf den aktuellen Turniertag syncen
   // (greift beim 60s-Polling — Mitternachts-Tagewechsel passt sich automatisch an)
   if (isBeamerMode){
@@ -1321,10 +1339,18 @@ async function fetchData(){
     const data = await res.json();
     // Config-Felder zuerst anwenden, damit TEAMS + TOURNAMENT_DATES für die nächste
     // Render-Iteration korrekt gefüllt sind (deriveLiveByTime nutzt TOURNAMENT_DATES).
-    // External Tournament: phase3.js rendert das Dashboard. App.js darf NICHT
-    // weitermachen (sonst DC-Shell-Flash). State leeren und body verstecken,
-    // damit phase3.js die Hoheit hat.
+    // External Tournament: phase3.js rendert das Dashboard.
+    // - Beim Initial-Load: Body bleibt versteckt, phase3.js's bootstrapRoute übernimmt.
+    // - Mid-Session (z.B. Tournament wurde gerade auf 'external' konvertiert):
+    //   Reload, damit phase3.js sauber neu startet — sonst weißer Bildschirm,
+    //   weil app.js polled aber phase3.js nicht mehr triggert.
     if (data.external) {
+      if (state.lastFetchOk) {
+        // Schon erfolgreich gerendert vorher → Mid-Session-Konversion
+        window.location.reload();
+        return;
+      }
+      // Initial-Load → leise verstecken, phase3.js macht's
       document.body.style.visibility = 'hidden';
       return;
     }

@@ -40,12 +40,26 @@ export const kayakersConnector = {
       if (!name || seen.has(slug)) return;
       seen.add(slug);
 
-      // Land + Datum stehen in voranstehenden H4-Elementen
-      const parent = $(a).closest('h4');
+      // Land + Datum stehen in voranstehenden H4-Elementen.
+      // Robuster: durchsuche alle prev-Geschwister bis 5 Elemente nach Datum-Pattern,
+      // statt nur prev('h4'). Strukturänderungen auf kayakers.nl waren der Bug-Grund.
+      const parent = $(a).closest('h4').length ? $(a).closest('h4') : $(a).parent();
       const text = parent.text();
       const countryMatch = text.match(/\((\w{2})\)\s*$/);
       const countryCode = countryMatch ? countryMatch[1] : null;
-      const dateHeader = parent.prev('h4').first().text().trim();
+
+      // Erst direkter Vorgänger probieren
+      let dateHeader = parent.prev('h4').first().text().trim();
+      if (!dateHeader || !/(Jan|Feb|Mar|Mär|Apr|May|Mai|Jun|Jul|Aug|Sep|Oct|Okt|Nov|Dec|Dez)/i.test(dateHeader)) {
+        // Fallback: bis zu 5 Geschwister nach oben durchsuchen
+        parent.prevAll().slice(0, 5).each((_, el) => {
+          const txt = $(el).text().trim();
+          if (txt && /(Jan|Feb|Mar|Mär|Apr|May|Mai|Jun|Jul|Aug|Sep|Oct|Okt|Nov|Dec|Dez)/i.test(txt)) {
+            dateHeader = txt;
+            return false;
+          }
+        });
+      }
 
       // Datum als ISO parsen für Sortierung + Upcoming/Past-Filter
       const dateIso = parseDateRangeStart(dateHeader);

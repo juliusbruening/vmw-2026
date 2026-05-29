@@ -30,10 +30,11 @@
   // Globalen State erweitern (vorausgesetzt window.state ist von app.js)
   window.state = window.state || {};
   Object.assign(window.state, {
-    role:           window.state.role || localStorage.getItem('vmw.role') || null,            // 'trainer'|'master'|null
-    refereeAuth:    window.state.refereeAuth || localStorage.getItem('refereeAuth') || null,  // Schiri-Login-Code
-    referees:       [],
-    assignments:    null,
+    role:               window.state.role || localStorage.getItem('vmw.role') || null,
+    refereeAuth:        window.state.refereeAuth || localStorage.getItem('refereeAuth') || null,
+    refereeDisplayName: window.state.refereeDisplayName || localStorage.getItem('refereeDisplayName') || null,
+    referees:           [],
+    assignments:        null,
   });
 
   // ─── Helpers ────────────────────────────────────────────────────────
@@ -156,18 +157,22 @@
   // LOGIN-MODAL mit 3 Tabs (Trainer / Master / Schiri)
   // ═══════════════════════════════════════════════════════════════════
   window.openLogin = function() {
-    // Landing-Page-Login: nur Master + Schiri. Trainer wird im Tournament-View aufgerufen.
+    // Tabs: Master + Schiri immer. Trainer zusätzlich, wenn auf einer
+    // Turnier-Seite (CURRENT_SLUG gesetzt) — Trainer-Auth ist Tournament-scoped.
     let activeTab = 'master';
     const tabBar = h('div', { class: 'p3-tabbar' });
     const body = h('div', { class: 'p3-body' });
+    const availableTabs = window.CURRENT_SLUG
+      ? ['master', 'trainer', 'schiri']
+      : ['master', 'schiri'];
 
     function render() {
       tabBar.innerHTML = '';
-      ['master', 'schiri'].forEach(t => {
+      availableTabs.forEach(t => {
         const btn = h('button', {
           class: 'p3-tab ' + (activeTab === t ? 'active' : ''),
           onclick: () => { activeTab = t; render(); },
-        }, t === 'master' ? 'Master' : 'Schiri');
+        }, t === 'master' ? 'Master' : t === 'trainer' ? 'Trainer' : 'Schiri');
         tabBar.appendChild(btn);
       });
 
@@ -195,6 +200,9 @@
             localStorage.setItem('vmw.role', activeTab);
             toast(`Eingeloggt als ${activeTab}`, 'success');
             closeModal();
+            // User-Area-Slot (im static index.html-Header) neu füllen,
+            // damit der eingeloggte Status sofort sichtbar wird.
+            window.fillUserAreaSlot && window.fillUserAreaSlot();
             if (activeTab === 'master') {
               window.openMasterAdmin();
             } else if (window.CURRENT_SLUG && typeof window.renderActiveTab === 'function') {
@@ -231,9 +239,14 @@
             if (!result.ok) { toast(result.error === 'rate_limited' ? 'Zu viele Versuche — bitte später' : 'Code ungültig', 'error'); return; }
             const normalizedCode = input.value.replace(/\s+/g, '').toUpperCase();
             window.state.refereeAuth = normalizedCode;
+            window.state.refereeDisplayName = result.referee.displayName;
             localStorage.setItem('refereeAuth', normalizedCode);
+            if (result.referee.displayName) {
+              localStorage.setItem('refereeDisplayName', result.referee.displayName);
+            }
             toast(`Willkommen ${result.referee.displayName}`, 'success');
             closeModal();
+            window.fillUserAreaSlot && window.fillUserAreaSlot();
             window.openMyProfile();
           } catch (e) {
             toast('Login fehlgeschlagen', 'error');
@@ -261,7 +274,9 @@
   window.logout = function() {
     if (window.state.refereeAuth) {
       window.state.refereeAuth = null;
+      window.state.refereeDisplayName = null;
       localStorage.removeItem('refereeAuth');
+      localStorage.removeItem('refereeDisplayName');
     }
     if (window.state.role) {
       window.state.role = null;
@@ -273,6 +288,81 @@
     // Nach Logout immer zurück zur Landing-Page
     window.location.href = '/';
   };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // USER-AREA — zentrales Header-Element rechts oben auf JEDER Seite.
+  //
+  // Zustände:
+  //   nicht eingeloggt        → [Login]
+  //   Schiri (refereeAuth)    → [Avatar JB · Mein Profil] [↳]
+  //   Master  (role=master)   → [⚙ Master-Admin]          [↳]
+  //   Trainer (role=trainer)  → [👥 Schiri-Einteilung]    [↳]
+  //                             auf Turnierseite — sonst nur [↳]
+  //
+  // Optional `opts.onBrand=true` → optimiert für VMW-roten Header (helle Buttons).
+  // ═══════════════════════════════════════════════════════════════════
+  window.renderUserArea = function(opts = {}) {
+    const onBrand = !!opts.onBrand;
+    const btnClass = onBrand ? 'p3-userarea-btn p3-userarea-btn-onbrand' : 'p3-userarea-btn';
+    const wrap = h('div', { class: 'p3-userarea' });
+
+    // Nicht eingeloggt → Login-Button
+    if (!window.state.role && !window.state.refereeAuth) {
+      const b = h('button', { class: btnClass }, 'Login');
+      b.onclick = () => window.openLogin();
+      wrap.appendChild(b);
+      return wrap;
+    }
+
+    // Schiri eingeloggt
+    if (window.state.refereeAuth) {
+      const name = window.state.refereeDisplayName || '';
+      const initials = initialsOf(name) || '·';
+      const profileBtn = h('button', { class: btnClass + ' p3-userarea-pill' },
+        h('span', { class: 'p3-userarea-avatar' }, initials),
+        h('span', {}, 'Mein Profil'),
+      );
+      profileBtn.onclick = () => window.openMyProfile();
+      wrap.appendChild(profileBtn);
+      wrap.appendChild(logoutIconBtn(btnClass));
+      return wrap;
+    }
+
+    // Master eingeloggt
+    if (window.state.role === 'master') {
+      const adminBtn = h('button', { class: btnClass }, '⚙ Master-Admin');
+      adminBtn.onclick = () => window.openMasterAdmin();
+      wrap.appendChild(adminBtn);
+      wrap.appendChild(logoutIconBtn(btnClass));
+      return wrap;
+    }
+
+    // Trainer eingeloggt — auf Turnierseite Einteilung, sonst nur Logout
+    if (window.state.role === 'trainer') {
+      if (window.CURRENT_SLUG) {
+        const lineupBtn = h('button', { class: btnClass }, '👥 Schiri-Einteilung');
+        lineupBtn.onclick = () => window.openTournamentLineup(window.CURRENT_SLUG);
+        wrap.appendChild(lineupBtn);
+      }
+      wrap.appendChild(logoutIconBtn(btnClass));
+      return wrap;
+    }
+
+    return wrap;
+  };
+
+  function logoutIconBtn(btnClass) {
+    const b = h('button', { class: btnClass + ' p3-userarea-icon', title: 'Logout', 'aria-label': 'Logout' }, '↳');
+    b.onclick = () => {
+      if (confirm('Wirklich ausloggen?')) window.logout();
+    };
+    return b;
+  }
+
+  function initialsOf(name) {
+    if (!name) return '';
+    return name.trim().split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // TURNIER-EINTEILUNGS-PAGE (Trainer + Master)
@@ -310,9 +400,7 @@
           window.location.href = `/t/${slug}`;
         } }, '← Zum Turnier'),
         titleEl,
-        h('button', { class: 'p3-btn small', onclick: () => {
-          window.logout();
-        } }, 'Logout'),
+        window.renderUserArea({ onBrand: true }),
       ),
       filtersBar,
       body,
@@ -764,6 +852,21 @@
   // ═══════════════════════════════════════════════════════════════════
   window.openMyProfile = async function() {
     closeModal();
+    // SOFORT Loading-State rendern, NICHT auf den Fetch warten. Sonst bleibt der
+    // User auf der vorherigen Page (z.B. External-Dashboard) und denkt "lädt nicht".
+    document.body.innerHTML = '';
+    document.body.classList.remove('p3-landing-mode', 'p3-page-external');
+    document.body.classList.add('p3-page', 'p3-page-schiri');
+    document.body.style.visibility = 'visible';
+    const loadingView = h('div', { class: 'p3-page-wrap' },
+      h('header', { class: 'p3-page-header' },
+        h('h1', {}, '👋 Mein Profil')),
+      h('div', { class: 'p3-body' },
+        h('div', { class: 'p3-hint', style: 'padding:32px;text-align:center' },
+          h('span', { class: 'p3-spinner' }), ' Profil wird geladen …')),
+    );
+    document.body.appendChild(loadingView);
+
     try {
       const [profile, entries] = await Promise.all([
         api('/api/me/profile'),
@@ -774,7 +877,6 @@
 
       // Page-Layout (kein Modal — bleibt persistent)
       document.body.innerHTML = '';
-      document.body.classList.remove('p3-landing-mode');
       document.body.classList.add('p3-page', 'p3-page-schiri');
       document.body.style.visibility = 'visible';
 
@@ -785,11 +887,7 @@
             window.renderLanding();
           } }, '← Übersicht'),
           h('h1', {}, `👋 ${ref.displayName || ref.firstName}`),
-          h('button', { class: 'p3-btn small', onclick: () => {
-            window.logout();
-            document.body.classList.remove('p3-page', 'p3-page-schiri');
-            window.renderLanding();
-          } }, 'Logout'),
+          window.renderUserArea({ onBrand: true }),
         ),
         h('div', { class: 'p3-body' },
           h('div', { class: 'p3-schiri-meta' }, `Klasse ${ref.level || '—'} · ${(ref.categories || []).join(', ')}`),
@@ -1132,11 +1230,21 @@
             codeBtn.onclick = () => withLoading(codeBtn, 'Generiere …', () => generateCode(r.id));
             actions.push(codeBtn);
 
-            // DKV-PDF lädt der Schiri jetzt selbst über sein Profil herunter —
-            // wir haben den Master-Bulk-Download bewusst entfernt, damit klar
-            // bleibt: die Verantwortung für die eigene Einsatz-Übersicht liegt
-            // beim Schiri. Master-Endpoint `/api/admin/referees/<id>/pdf-...`
-            // bleibt für Edge-Cases (z.B. abwesender Schiri) im Backend bestehen.
+            // Master kann pro Schiri den DKV-Bogen herunterladen (z.B. wenn der
+            // Schiri selbst keinen Zugriff hat oder ihn nicht generiert).
+            const pdfBtn = h('button', {
+              class: 'p3-btn small',
+              title: 'DKV-Einsatzbogen für ' + r.displayName + ' herunterladen',
+            }, '📄 PDF');
+            pdfBtn.onclick = () => withLoading(pdfBtn, 'PDF …', async () => {
+              const year = new Date().getFullYear();
+              const safeName = (r.displayName || r.firstName || 'schiri').replace(/[^a-z0-9-]/gi, '_');
+              await window.downloadFile(
+                `/api/admin/referees/${r.id}/pdf-einsatzbogen?year=${year}`,
+                `DKV-Einsatzbogen-${safeName}-${year}.pdf`,
+              );
+            });
+            actions.push(pdfBtn);
 
             const deactivateBtn = h('button', { class: 'p3-btn small danger', title: 'Deaktivieren (Soft-Delete)' }, '🚫');
             deactivateBtn.onclick = () => withLoading(deactivateBtn, '', async () => {
@@ -1375,7 +1483,7 @@
       h('header', { class: 'p3-page-header' },
         h('button', { class: 'p3-btn small', onclick: () => { document.body.classList.remove('p3-page'); window.renderLanding(); } }, '← Übersicht'),
         h('h1', {}, 'Master-Admin'),
-        h('button', { class: 'p3-btn small', onclick: () => { window.logout(); document.body.classList.remove('p3-page'); window.renderLanding(); } }, 'Logout'),
+        window.renderUserArea({ onBrand: true }),
       ),
       tabBar,
       body,
@@ -2001,27 +2109,7 @@
     document.body.appendChild(root);
 
     // ─── Hero (VMW-Brand) ─────────────────────────────────────────────
-    const isLoggedIn = !!(window.state.role || window.state.refereeAuth);
-    const userButton = (() => {
-      if (window.state.role === 'master') {
-        const b = h('button', { class: 'p3-btn p3-btn-onbrand' }, '⚙ Master-Admin');
-        b.onclick = window.openMasterAdmin;
-        return b;
-      }
-      if (window.state.refereeAuth) {
-        const b = h('button', { class: 'p3-btn p3-btn-onbrand' }, '👤 Mein Profil');
-        b.onclick = window.openMyProfile;
-        return b;
-      }
-      if (window.state.role === 'trainer') {
-        const b = h('button', { class: 'p3-btn p3-btn-onbrand' }, '🚪 Logout');
-        b.onclick = () => { window.logout(); window.renderLanding(); };
-        return b;
-      }
-      const b = h('button', { class: 'p3-btn p3-btn-onbrand' }, 'Login');
-      b.onclick = window.openLogin;
-      return b;
-    })();
+    // User-Area kommt aus renderUserArea() (zentral) — keine eigene Button-Logik mehr
 
     root.appendChild(h('div', { class: 'p3-hero' },
       h('div', { class: 'p3-hero-inner' },
@@ -2030,7 +2118,7 @@
           h('h1', {}, 'VMW Berlin Live-App'),
           h('p', {}, 'Übersicht aller Turniere und Ligen, in denen VMW Berlin spielt. Wenn möglich mit Live-Spielständen direkt in der App — sonst mit Verlinkung auf den externen Spielplan. Außerdem zentral für das Tracking der Schiri-Einsätze: Trainer pflegen die Einteilungen, jeder Schiri lädt seinen DKV-Einsatzbogen am Jahresende selbst herunter.'),
         ),
-        h('div', { class: 'p3-hero-actions' }, userButton),
+        h('div', { class: 'p3-hero-actions' }, window.renderUserArea({ onBrand: true })),
       ),
     ));
 
@@ -2075,8 +2163,10 @@
           tsForCount = allTournaments.filter(t => tournamentYear(t) === activeYear);
         }
         const total    = tsForCount.length;
-        const active   = tsForCount.filter(t => t.status === 'active').length;
-        const finished = tsForCount.filter(t => t.status === 'completed').length;
+        // Zählen nach Display-Gruppe — sonst sagt der Streifen "2 laufen gerade"
+        // obwohl die noch in der Zukunft liegen.
+        const active   = tsForCount.filter(t => displayGroup(t) === 'running').length;
+        const finished = tsForCount.filter(t => displayGroup(t) === 'completed').length;
 
         // Stats-Block (links)
         const yearLabel = activeYear === 'archive' ? 'Archiv' : activeYear;
@@ -2090,19 +2180,9 @@
           finished > 0 ? h('span', {}, h('strong', {}, String(finished)), ' beendet') : null,
         );
 
-        // Personalisierter Button (Schiri-DKV-Bogen)
-        let personalAction = null;
-        if (window.state.refereeAuth && activeYear !== 'archive') {
-          const dlBtn = h('button', { class: 'p3-btn small primary' },
-            '📄 DKV-Bogen ' + activeYear);
-          dlBtn.onclick = (e) => withLoading(e.currentTarget, 'PDF wird erstellt …', async () => {
-            await window.downloadFile(
-              `/api/me/pdf-einsatzbogen?year=${activeYear}`,
-              `DKV-Einsatzbogen-${activeYear}.pdf`,
-            );
-          });
-          personalAction = dlBtn;
-        }
+        // DKV-Bogen-Download ist NICHT mehr auf der Landing — gehört ins Schiri-Profil.
+        // Schiri findet ihn dort (rechts oben "Mein Profil" → unten in der Übersicht).
+        const personalAction = null;
 
         // Jahres-Tabs (rechts)
         const tabs = h('div', { class: 'p3-yeartabs' });
@@ -2140,24 +2220,25 @@
           visible = allTournaments.filter(t => tournamentYear(t) === activeYear);
         }
 
-        const groups = { active: [], 'awaiting-schedule': [], draft: [], completed: [] };
-        visible.forEach(t => { (groups[t.status] || (groups.completed)).push(t); });
+        // Anzeige-Buckets (datumbasiert, nicht status-basiert) — siehe displayGroup
+        const groups = { running: [], planned: [], draft: [], completed: [] };
+        visible.forEach(t => { groups[displayGroup(t)].push(t); });
 
         const labels = {
-          active:               { icon: '🟢', title: 'Läuft gerade' },
-          'awaiting-schedule':  { icon: '📅', title: 'Geplant' },
-          draft:                { icon: '✏️',  title: 'Entwürfe' },
-          completed:            { icon: '✅', title: 'Beendet' },
+          running:    { icon: '🟢', title: 'Läuft gerade' },
+          planned:    { icon: '📅', title: 'Geplant' },
+          draft:      { icon: '✏️',  title: 'Entwürfe' },
+          completed:  { icon: '✅', title: 'Beendet' },
         };
 
         let anyShown = false;
-        for (const status of ['active', 'awaiting-schedule', 'draft']) {
-          const ts = groups[status];
+        for (const bucket of ['running', 'planned', 'draft']) {
+          const ts = groups[bucket];
           if (!ts.length) continue;
           anyShown = true;
           listSection.appendChild(h('h2', { class: 'p3-landing-section' },
-            h('span', {}, labels[status].icon),
-            ' ' + labels[status].title,
+            h('span', {}, labels[bucket].icon),
+            ' ' + labels[bucket].title,
             h('span', { class: 'p3-section-count' }, String(ts.length))));
           const grid = h('div', { class: 'p3-card-grid' });
           ts.forEach(t => grid.appendChild(renderTournamentCard(t)));
@@ -2175,7 +2256,7 @@
           const grid = h('div', { class: 'p3-card-grid', style: 'margin-top:12px' });
           groups.completed.forEach(t => grid.appendChild(renderTournamentCard(t)));
           const details = h('details', { class: 'p3-completed-details' }, summary, grid);
-          details.open = true; // default aufgeklappt — sonst wirkt die Seite leer
+          details.open = true;
           listSection.appendChild(details);
         }
 
@@ -2206,6 +2287,35 @@
   const CATEGORY_LABELS = {
     herren: 'Herren', damen: 'Damen', junioren: 'U21', jugend: 'Jugend', schueler: 'Schüler',
   };
+
+  // ───────────────────────────────────────────────────────────────────────
+  // displayGroup — mappt einen Tournament-Status auf eine Anzeige-Sektion.
+  //
+  // Hintergrund: status='active' im Schema bedeutet "sichtbar und nicht beendet"
+  // — also auch Turniere, deren Spielplan steht aber die noch in der Zukunft
+  // liegen. User-mental-model: "active = läuft jetzt". Wir gruppieren daher
+  // datumbasiert, nicht status-basiert:
+  //
+  //   running  : Turnier ist HEUTE im Datums-Fenster
+  //   planned  : Turnier ist in der Zukunft (egal ob Spielplan da oder nicht)
+  //   draft    : Master-only Entwurf
+  //   completed: Beendet
+  //
+  // todayIso optional (für Tests). Default: heute (Berlin).
+  function displayGroup(t, todayIso) {
+    if (t.status === 'completed') return 'completed';
+    if (t.status === 'draft')     return 'draft';
+    // active oder awaiting-schedule → datumbasiert
+    const today = todayIso || new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Berlin' });
+    const dates = t.dates?.length ? t.dates : (t.expectedDates || []);
+    if (!dates.length) return 'planned'; // ohne Datum: kann nur geplant sein
+    const first = dates[0];
+    const last  = dates[dates.length - 1];
+    if (today < first) return 'planned';
+    if (today > last)  return 'completed'; // Cron hat's noch nicht auf completed gesetzt
+    return 'running';
+  }
+  window.displayGroup = displayGroup; // exportiert für Tests
 
   // Rollen-Labels (UI)
   const ROLE_LABELS_DISPLAY = {
@@ -2242,9 +2352,10 @@
     const statusBadge = h('span', { class: `p3-status-badge p3-status-${cfg.status}` },
       ({ active: 'live', 'awaiting-schedule': 'geplant', draft: 'draft', completed: 'beendet' }[cfg.status] || cfg.status));
 
-    const trainerBtn = isTrainer
-      ? h('button', { class: 'p3-btn small', onclick: () => window.logout() }, 'Logout')
-      : h('button', { class: 'p3-btn small', onclick: () => window.openTrainerLogin(slug) }, '🔑 Trainer-Login');
+    // User-Area zeigt den richtigen Login-/Profil-/Logout-Knopf.
+    // Trainer-Login ist im openLogin-Modal als zusätzlicher Tab auf
+    // Turnierseiten verfügbar (siehe openLogin).
+    const userArea = window.renderUserArea({ onBrand: true });
 
     const dateStr = formatDateRange(cfg.dates || []);
 
@@ -2288,7 +2399,7 @@
             h('span', {}, dateStr),
             statusBadge),
         ),
-        trainerBtn,
+        userArea,
       ),
       h('div', { class: 'p3-body' },
         resourcesSection,
@@ -2355,7 +2466,8 @@
     );
 
     const roleGrid = h('div', { class: 'p3-ext-entry-roles' });
-    const visibleRoles = ['ref1', 'ref2', 'scorer', 'timer', 'line1'];
+    // Alle 7 Rollen anzeigen (vorher fehlten shotclock + line2)
+    const visibleRoles = ['ref1', 'ref2', 'scorer', 'timer', 'shotclock', 'line1', 'line2'];
     for (const code of visibleRoles) {
       const refId = entry.roles?.[code];
       const ref = refId ? refsById.get(refId) : null;
@@ -2504,26 +2616,39 @@
 
   function renderTournamentCard(t) {
     const isExternal = t.type === 'external';
-    const status = t.status;
+    // Status-Pille auf der Karte folgt der Display-Gruppe (datumbasiert) statt
+    // dem rohen Code-Status — sonst zeigt eine Karte "live" obwohl das Turnier
+    // erst in 5 Tagen anfängt.
+    const bucket = displayGroup(t);
     const statusBadgeText = {
-      'active': 'live', 'awaiting-schedule': 'geplant', 'draft': 'draft', 'completed': 'beendet'
-    }[status] || status;
+      running:   'live',
+      planned:   'geplant',
+      draft:     'draft',
+      completed: 'beendet',
+    }[bucket] || bucket;
     const meta = formatDateRange(t.dates?.length ? t.dates : (t.expectedDates || []));
+
+    // Subtiler Hinweis "Spielplan ausstehend" für kayakers-Turniere ohne
+    // Discovery-Erfolg — der Master sieht's, kann nichts dagegen tun, aber der
+    // Schiri-Gast weiß: Spielplan kommt noch.
+    const awaitingSchedule = !isExternal && t.status === 'awaiting-schedule';
 
     // Top-Badge: signalisiert App-Turnier vs Externer Plan
     const topBadge = isExternal
       ? h('span', { class: 'p3-typebadge p3-typebadge-external' }, '🔗 Externer Plan')
       : h('span', { class: 'p3-typebadge p3-typebadge-live' }, '📊 Live-Spielplan');
 
-    // Beide Card-Typen klicken auf /t/<slug> → Dashboard / Live-View
-    // (Externe Card hat dort dann den prominenten Externer-Link)
     const cardClass = isExternal ? 'p3-tcard p3-tcard-external' : 'p3-tcard p3-tcard-live';
     return h('a', { class: cardClass, href: `/t/${t.slug}` },
       topBadge,
       h('div', { class: 'p3-tcard-name' }, t.name),
       h('div', { class: 'p3-tcard-meta' }, meta),
+      awaitingSchedule
+        ? h('div', { class: 'p3-tcard-hint', style: 'margin-left:4px;margin-top:4px' },
+            '⏳ Spielplan ausstehend')
+        : null,
       h('div', { class: 'p3-tcard-footer' },
-        h('span', { class: `p3-status-badge p3-status-${status}` }, statusBadgeText),
+        h('span', { class: `p3-status-badge p3-status-${bucket}` }, statusBadgeText),
         isExternal
           ? h('span', { class: 'p3-tcard-hint' },
               t.externalResourceCount > 0
@@ -2552,7 +2677,19 @@
     document.body.style.visibility = 'visible';
   }
 
+  // Füllt den User-Area-Slot im static index.html-Header (kayakers-Tournament-View).
+  // Wird beim Boot UND nach Login/Logout aufgerufen, damit der Status aktuell bleibt.
+  window.fillUserAreaSlot = function() {
+    const slot = document.getElementById('userAreaSlot');
+    if (!slot) return;
+    slot.innerHTML = '';
+    slot.appendChild(window.renderUserArea({ onBrand: false }));
+  };
+
   function bootstrapRoute() {
+    // User-Area-Slot füllen wo vorhanden (kayakers-Tournament-View)
+    window.fillUserAreaSlot();
+
     const pathname = window.location.pathname;
 
     // /me/<code> — Bookmark-Login für Schiris

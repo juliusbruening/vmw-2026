@@ -219,8 +219,18 @@
 .p3-page-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #C8102E; color: white;     /* VMW-Rot — Standard für alle Page-Header */
+  background: rgba(200, 16, 46, 0.88);    /* VMW-Rot mit Transparenz für Blur-Effekt */
+  color: white;
+  /* Sticky-Header mit Glass-Blur — bleibt beim Scrollen oben sichtbar */
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+}
+/* Fallback für Browser ohne backdrop-filter: voll-opake Hintergrundfarbe */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .p3-page-header { background: #C8102E; }
 }
 .p3-page-header h1 { margin: 0; font-size: 16px; flex: 1; text-align: center; }
 .p3-page-header .p3-btn { background: rgba(255,255,255,0.15); color: white; border-color: transparent; }
@@ -395,7 +405,11 @@ body.p3-landing-mode { background: #f9fafb; }
   border: 1px solid #e5e7eb; border-radius: 14px;
   text-decoration: none; color: #111;
   background: linear-gradient(to bottom right, #ffffff, #fafafa);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  /* Subtiler Resting-Shadow für mehr Tiefe, intensiviert sich smooth bei Hover */
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 1px 1px rgba(0,0,0,0.03);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.2s ease;
   position: relative;
   overflow: hidden;
 }
@@ -427,10 +441,14 @@ body.p3-landing-mode { background: #f9fafb; }
   padding: 2px 8px; border-radius: 999px;
   text-transform: uppercase; letter-spacing: 0.05em;
 }
-.p3-status-active            { background: #dcfce7; color: #166534; }
-.p3-status-awaiting-schedule { background: #fef3c7; color: #92400e; }
+/* Display-Gruppen-Klassen (datumbasiert) */
+.p3-status-running           { background: #dcfce7; color: #166534; }
+.p3-status-planned           { background: #fef3c7; color: #92400e; }
 .p3-status-draft             { background: #f3e8ff; color: #6b21a8; }
 .p3-status-completed         { background: #e5e7eb; color: #4b5563; }
+/* Legacy-Klassen (Code-Status) — bleiben fallbacks für Lineup-Status etc. */
+.p3-status-active            { background: #dcfce7; color: #166534; }
+.p3-status-awaiting-schedule { background: #fef3c7; color: #92400e; }
 
 .p3-ext-badge {
   font-size: 11px; font-weight: 500;
@@ -518,17 +536,77 @@ body.p3-landing-mode { background: #f9fafb; }
 .p3-landing-footer a:hover { text-decoration: underline; }
 
 /* ═══════════════════════════════════════════════════════════════════
+   USER-AREA — zentrales Login/Logout/Profil-Element auf jeder Seite
+   ═══════════════════════════════════════════════════════════════════ */
+
+.p3-userarea {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.p3-userarea-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #111;
+  transition: background 0.15s, border-color 0.15s;
+}
+.p3-userarea-btn:hover { background: #f9fafb; border-color: #9ca3af; }
+.p3-userarea-btn-onbrand {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+}
+.p3-userarea-btn-onbrand:hover {
+  background: rgba(255,255,255,0.25);
+  border-color: rgba(255,255,255,0.45);
+}
+.p3-userarea-pill {
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+}
+.p3-userarea-avatar {
+  width: 24px; height: 24px;
+  background: white;
+  color: #B83A2E;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+}
+.p3-userarea-icon {
+  padding: 6px 10px;
+  min-width: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    STATUS-STREIFEN + JAHRES-TABS (Landing v2)
    ═══════════════════════════════════════════════════════════════════ */
 
 .p3-statusbar {
   display: flex; align-items: center; gap: 16px;
   padding: 12px 20px;
-  background: #F8F7F2;
+  background: rgba(248, 247, 242, 0.85);    /* leicht transparent für Glass-Effekt */
   border-bottom: 1px solid #e5e7eb;
   font-size: 13px;
   color: #444441;
   flex-wrap: wrap;
+  /* Sticky beim Scrollen — Filter bleiben oben sichtbar */
+  position: sticky; top: 0; z-index: 40;
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .p3-statusbar { background: #F8F7F2; }
 }
 .p3-stats-line {
   display: flex; align-items: center; gap: 8px;
@@ -669,8 +747,8 @@ body.p3-landing-mode { background: #f9fafb; }
 .p3-ext-entry-actions { display: flex; gap: 6px; }
 .p3-ext-entry-roles {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 6px; font-size: 11px;
+  grid-template-columns: repeat(7, 1fr);   /* alle 7 Rollen: ref1,ref2,scorer,timer,shotclock,line1,line2 */
+  gap: 4px; font-size: 11px;
 }
 .p3-ext-role-cell {
   background: #f9fafb;
