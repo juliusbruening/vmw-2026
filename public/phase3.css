@@ -148,6 +148,7 @@
   font-size: 13px;
 }
 .p3-banner.warning { background: #fef3c7; border-left: 3px solid #d97706; }
+.p3-banner.info    { background: #e0f2fe; border-left: 3px solid #0284c7; }
 .p3-banner.ok      { background: #ecfdf5; border-left: 3px solid #0E7C3A; }
 .p3-banner.error   { background: #fef2f2; border-left: 3px solid #dc2626; }
 
@@ -586,6 +587,18 @@ body.p3-landing-mode { background: #f9fafb; }
 .p3-userarea-icon {
   padding: 6px 10px;
   min-width: 0;
+}
+.p3-userarea-logout {
+  padding: 6px 12px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.p3-userarea-compact {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

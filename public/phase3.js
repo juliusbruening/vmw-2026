@@ -159,7 +159,9 @@
   window.openLogin = function() {
     // Tabs: Master + Schiri immer. Trainer zusätzlich, wenn auf einer
     // Turnier-Seite (CURRENT_SLUG gesetzt) — Trainer-Auth ist Tournament-scoped.
-    let activeTab = 'master';
+    // Default-Tab: Schiri auf Landing/extern (häufigster Fall), Master/Trainer
+    // auf Tournament-Seiten (wo Master+Trainer aktiv arbeiten).
+    let activeTab = window.CURRENT_SLUG ? 'master' : 'schiri';
     const tabBar = h('div', { class: 'p3-tabbar' });
     const body = h('div', { class: 'p3-body' });
     const availableTabs = window.CURRENT_SLUG
@@ -330,7 +332,7 @@
 
     // Master eingeloggt
     if (window.state.role === 'master') {
-      const adminBtn = h('button', { class: btnClass }, '⚙ Master-Admin');
+      const adminBtn = h('button', { class: btnClass + ' p3-userarea-compact' }, 'Master-Admin');
       adminBtn.onclick = () => window.openMasterAdmin();
       wrap.appendChild(adminBtn);
       wrap.appendChild(logoutIconBtn(btnClass));
@@ -340,7 +342,7 @@
     // Trainer eingeloggt — auf Turnierseite Einteilung, sonst nur Logout
     if (window.state.role === 'trainer') {
       if (window.CURRENT_SLUG) {
-        const lineupBtn = h('button', { class: btnClass }, '👥 Schiri-Einteilung');
+        const lineupBtn = h('button', { class: btnClass + ' p3-userarea-compact' }, 'Einteilung');
         lineupBtn.onclick = () => window.openTournamentLineup(window.CURRENT_SLUG);
         wrap.appendChild(lineupBtn);
       }
@@ -352,7 +354,8 @@
   };
 
   function logoutIconBtn(btnClass) {
-    const b = h('button', { class: btnClass + ' p3-userarea-icon', title: 'Logout', 'aria-label': 'Logout' }, '↳');
+    // Klares Text-Label statt kryptischem Icon — "↳" war schlecht erkennbar.
+    const b = h('button', { class: btnClass + ' p3-userarea-logout', title: 'Logout', 'aria-label': 'Logout' }, '🚪 Logout');
     b.onclick = () => {
       if (confirm('Wirklich ausloggen?')) window.logout();
     };
@@ -452,8 +455,9 @@
     }
 
     // Alle Divisionen im Snapshot — für Klassen-Filter
+    // Guard: snapshot kann fehlen (externes Turnier, kayakers ohne Spielplan)
     const divsSeen = new Map();
-    snapshot.matches.forEach(m => {
+    (snapshot?.matches || []).forEach(m => {
       if (m.divisionCode && !divsSeen.has(m.divisionCode)) {
         divsSeen.set(m.divisionCode, m.division);
       }
@@ -461,6 +465,9 @@
 
     function renderFilters() {
       filtersBar.innerHTML = '';
+      // Ohne Spielplan: keine Filter (machen keinen Sinn — manuelle Einsätze
+      // haben keine Match-Nrn aus kayakers, kein "offen vs. beendet" Status)
+      if (!snapshot?.matches?.length) return;
       // Tag-Filter
       const dayRow = h('div', { class: 'p3-filter-row' });
       dayRow.appendChild(h('span', { class: 'p3-flabel' }, 'Tag:'));
@@ -2402,6 +2409,13 @@
         userArea,
       ),
       h('div', { class: 'p3-body' },
+        // Kayakers-Hybrid-Banner: Spielplan kommt vielleicht noch
+        cfg.isKayakersAwaiting
+          ? h('div', { class: 'p3-banner info', style: 'margin-bottom:16px' },
+              '⏳ Der Spielplan auf kayakers.nl ist noch nicht veröffentlicht. ',
+              'Sobald er erscheint, wird diese Seite automatisch durch den Live-Spielplan ersetzt. ',
+              'Bis dahin kannst du Schiri-Einsätze unten manuell pflegen.')
+          : null,
         resourcesSection,
         h('div', { class: 'p3-ext-einsatz-section' },
           einsatzHeader,

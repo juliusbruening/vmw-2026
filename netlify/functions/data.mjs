@@ -88,6 +88,46 @@ export default async (req) => {
       listExternalAssignments(slug).catch(() => []),
     ]);
 
+    // ─── Hybrid-Fallback: kayakers-Turnier OHNE Spielplan → Dashboard ──────────
+    // Wenn das Turnier zwar als 'tournament' angelegt ist, aber noch keine Matches
+    // im Snapshot stehen (z.B. kayakers hat den Plan noch nicht veröffentlicht),
+    // liefern wir es als `external: true` aus + synthetisieren die kayakers-Quelle
+    // als Ressource. Frontend rendert dann dieselbe Dashboard-View wie für externe
+    // Turniere — mit Link zur kayakers-Seite + manuellen Einsätzen.
+    const hasMatches = Array.isArray(snapshot?.matches) && snapshot.matches.length > 0;
+    if (!hasMatches) {
+      const resources = [];
+      // kayakers-Source als ersten Link hinzufügen
+      const viewUrl = config.source?.viewUrl;
+      const matchListUrl = config.source?.matchListUrl;
+      if (viewUrl) {
+        resources.push({ title: 'kayakers.nl (Turnier-Übersicht)', url: viewUrl });
+      } else if (matchListUrl) {
+        resources.push({ title: 'kayakers.nl (Spielplan-URL)', url: matchListUrl });
+      }
+      return new Response(JSON.stringify({
+        slug, external: true,
+        config: {
+          slug: config.slug,
+          name: config.name,
+          type: config.type ?? 'tournament',
+          status: config.status,
+          dates: config.dates ?? [],
+          ourTeams: config.ourTeams ?? [],
+          vmwCategories: vmwCategoriesFor(config),
+          external: { resources },
+          // Hinweis fürs Frontend, dass das ein kayakers-Hybrid ist (Spielplan kommt noch)
+          isKayakersAwaiting: true,
+        },
+        externalAssignments,
+        referees,
+        server: new Date().toISOString(),
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8', ...cacheHeaders },
+      });
+    }
+
     const uiConfig = {
       slug: config.slug,
       name: config.name,
