@@ -304,6 +304,19 @@ function parseFirstDateFromHtml(html) {
  * Parsed das erste Datum aus einem Range-Header wie "May 23rd - May 25th" oder
  * "Aug 8th, 25" oder "Apr 25th - Apr 26th" zu YYYY-MM-DD.
  * Returnt null bei nicht-parsebarem Input.
+ *
+ * Jahres-Heuristik (wenn das Jahr im Text fehlt — kayakers lässt es bei
+ * Headers für das laufende Jahr oft weg):
+ *   - Default: aktuelles Jahr.
+ *   - Liegt der Monat mehr als 1 Monat vor `now`, nehmen wir `currentYear + 1`
+ *     an — kayakers listet primär kommende Spieltage, deshalb ist z.B. "Feb"
+ *     beim Scrape im November fast immer der nächste Februar.
+ *   - 1-Monats-Toleranz schützt frische "letzter Monat"-Einträge (z.B. ein
+ *     "Aug"-Turnier, das im September noch in der Liste hängt — soll als
+ *     August dieses Jahres erkannt werden, nicht als nächster August).
+ *   - Edge-Case: ein Turnier mehrere Monate in der Vergangenheit ohne Jahr
+ *     liefert ein falsches +1 — kommt in der Praxis fast nie vor, aber Master
+ *     kann den Wert im Tournament-Edit-Modal manuell überschreiben.
  */
 function parseDateRangeStart(headerText) {
   if (!headerText) return null;

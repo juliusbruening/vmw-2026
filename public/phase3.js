@@ -194,27 +194,40 @@
         input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } };
         setTimeout(() => input.focus(), 50);
         btn.onclick = () => withLoading(btn, 'Prüfe …', async () => {
+          // PHASE 1: Reine Auth-Prüfung. Nur Fehler HIER lösen "Login fehlgeschlagen" aus.
+          let loginOk = false;
           try {
             window.state.adminPassword = input.value;
             await api(`/api/admin/login?slug=${encodeURIComponent(window.CURRENT_SLUG || 'dc2026')}`, { method: 'POST', body: '{}' });
-            window.state.role = activeTab;
-            localStorage.setItem('vmw.adminPwd', input.value);
-            localStorage.setItem('vmw.role', activeTab);
-            toast(`Eingeloggt als ${activeTab}`, 'success');
-            closeModal();
-            // User-Area-Slot (im static index.html-Header) neu füllen,
-            // damit der eingeloggte Status sofort sichtbar wird.
-            window.fillUserAreaSlot && window.fillUserAreaSlot();
-            if (activeTab === 'master') {
-              window.openMasterAdmin();
-            } else if (window.CURRENT_SLUG && typeof window.renderActiveTab === 'function') {
-              window.renderActiveTab();
-            } else {
-              window.renderLanding();
-            }
+            loginOk = true;
           } catch (e) {
             window.state.adminPassword = null;
             toast('Login fehlgeschlagen', 'error');
+            return;
+          }
+
+          // PHASE 2: State + Persistence (sollte nicht fehlschlagen, aber falls doch
+          // — der Login war erfolgreich, also Toast trotzdem als Success zeigen).
+          window.state.role = activeTab;
+          localStorage.setItem('vmw.adminPwd', input.value);
+          localStorage.setItem('vmw.role', activeTab);
+          toast(`Eingeloggt als ${activeTab}`, 'success');
+          closeModal();
+
+          // PHASE 3: Rendering. Fehler hier dürfen den Login-Erfolg NICHT überdecken
+          // (sonst sieht der User "Login fehlgeschlagen" obwohl er eingeloggt ist).
+          try {
+            window.fillUserAreaSlot && window.fillUserAreaSlot();
+            if (activeTab === 'master') {
+              await window.openMasterAdmin();
+            } else if (window.CURRENT_SLUG && typeof window.renderActiveTab === 'function') {
+              window.renderActiveTab();
+            } else {
+              await window.renderLanding();
+            }
+          } catch (renderErr) {
+            console.error('[login] Post-Login-Render fehlgeschlagen:', renderErr);
+            // Kein User-facing-Toast — Login war OK. User kann Seite reloaden.
           }
         });
         // <form> wrappen — sonst registriert Safari/Chrome das Passwort nicht zum Speichern
@@ -1145,7 +1158,7 @@
 
     async function render() {
       tabBar.innerHTML = '';
-      for (const t of [['tournaments','Turniere'], ['referees','Schiris'], ['reports','Reports']]) {
+      for (const t of [['tournaments','Turniere'], ['referees','Schiris'], ['reports','Reports'], ['banner','Banner']]) {
         const btn = h('button', {
           class: 'p3-tab ' + (activeTab === t[0] ? 'active' : ''),
           onclick: () => { activeTab = t[0]; render(); },
@@ -1342,6 +1355,81 @@
           )
         );
         body.appendChild(table);
+      }
+
+      if (activeTab === 'banner') {
+        // Aktuellen Banner laden
+        let current = null;
+        try { current = (await api('/api/admin/banner')).banner; } catch { current = null; }
+
+        body.appendChild(h('div', { class: 'p3-hint', style: 'margin-bottom:12px' },
+          'Hier kannst du eine globale Info-Nachricht setzen, die auf jeder Seite ' +
+          'der App ganz oben angezeigt wird — z.B. „Testphase, bitte Bugs an Julius melden".'));
+
+        const msgInput = h('textarea', {
+          class: 'p3-input',
+          rows: 3,
+          maxlength: 280,
+          placeholder: 'Nachrichten-Text — max. 280 Zeichen',
+        });
+        if (current?.message) msgInput.value = current.message;
+
+        const levelSelect = h('select', { class: 'p3-input' },
+          h('option', { value: 'info'    }, 'ℹ Info (blau)'),
+          h('option', { value: 'warning' }, '⚠ Warnung (gelb)'));
+        if (current?.level === 'warning') levelSelect.value = 'warning';
+
+        const activeCb = h('input', { type: 'checkbox' });
+        if (current?.active) activeCb.checked = true;
+
+        const saveBtn = h('button', { class: 'p3-btn primary' }, 'Banner speichern');
+        saveBtn.onclick = () => withLoading(saveBtn, 'Speichere …', async () => {
+          try {
+            await api('/api/admin/banner', {
+              method: 'PUT',
+              body: JSON.stringify({
+                message: msgInput.value.trim(),
+                level: levelSelect.value,
+                active: !!activeCb.checked,
+              }),
+            });
+            toast('Banner gespeichert', 'success');
+            // Cache invalidieren + Banner sofort neu rendern
+            const res = await fetch('/api/banner?_ts=' + Date.now(), { cache: 'no-store' });
+            const data = res.ok ? await res.json() : null;
+            bannerCache = data?.active ? data : null;
+            window.renderGlobalBanner();
+            render();
+          } catch (e) {
+            toast('Fehler: ' + e.message, 'error');
+          }
+        });
+
+        const clearBtn = h('button', { class: 'p3-btn danger' }, '🗑 Banner löschen');
+        clearBtn.onclick = () => withLoading(clearBtn, 'Lösche …', async () => {
+          if (!confirm('Banner komplett entfernen?')) return;
+          try {
+            await api('/api/admin/banner', { method: 'DELETE' });
+            toast('Banner entfernt', 'success');
+            bannerCache = null;
+            window.renderGlobalBanner();
+            render();
+          } catch (e) {
+            toast('Fehler: ' + e.message, 'error');
+          }
+        });
+
+        body.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Nachricht'), msgInput));
+        body.appendChild(h('div', { class: 'p3-field' }, h('label', {}, 'Typ'), levelSelect));
+        body.appendChild(h('div', { class: 'p3-field' },
+          h('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer' },
+            activeCb, h('span', {}, 'Banner aktiv — wird auf allen Seiten angezeigt'))));
+        body.appendChild(h('div', { class: 'p3-row', style: 'gap:8px; margin-top:12px' }, saveBtn, clearBtn));
+
+        if (current?.updatedAt) {
+          body.appendChild(h('div', { class: 'p3-hint', style: 'margin-top:16px' },
+            `Zuletzt gesetzt: ${new Date(current.updatedAt).toLocaleString('de-DE')} von ${current.updatedBy || 'master'}`));
+        }
       }
     }
 
@@ -2699,6 +2787,44 @@
     slot.innerHTML = '';
     slot.appendChild(window.renderUserArea({ onBrand: false }));
   };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // GLOBALER BANNER — von Master gesetzte Info-Nachricht oben auf jeder Seite
+  // ═══════════════════════════════════════════════════════════════════
+  let bannerCache = null;
+  async function fetchGlobalBanner() {
+    try {
+      const res = await fetch('/api/banner', { cache: 'no-store' });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.active ? data : null;
+    } catch { return null; }
+  }
+  // Rendert den Banner als allererstes Body-Child wenn aktiv.
+  // Wird bei jedem Page-Render aufgerufen.
+  window.renderGlobalBanner = function() {
+    // Vorherigen Banner entfernen (falls vorhanden)
+    document.querySelectorAll('.p3-global-banner').forEach(el => el.remove());
+    if (!bannerCache?.message) return;
+    const bar = h('div', { class: `p3-global-banner p3-global-banner-${bannerCache.level || 'info'}` },
+      h('span', { class: 'p3-global-banner-icon' }, bannerCache.level === 'warning' ? '⚠' : 'ℹ'),
+      h('span', { class: 'p3-global-banner-text' }, bannerCache.message));
+    document.body.insertBefore(bar, document.body.firstChild);
+  };
+  // Beim ersten Boot fetchen + rendern
+  fetchGlobalBanner().then(b => {
+    bannerCache = b;
+    window.renderGlobalBanner();
+    // MutationObserver: wenn body geleert wird (innerHTML=''), Banner wieder ergänzen.
+    // So müssen die ~8 Render-Funktionen den Banner nicht explizit nachladen.
+    if (bannerCache?.message) {
+      new MutationObserver(() => {
+        if (bannerCache?.message && !document.querySelector('.p3-global-banner')) {
+          window.renderGlobalBanner();
+        }
+      }).observe(document.body, { childList: true });
+    }
+  });
 
   function bootstrapRoute() {
     // User-Area-Slot füllen wo vorhanden (kayakers-Tournament-View)

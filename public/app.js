@@ -99,7 +99,13 @@ function applyHeaderTitle(uiConfig){
   const titleEl = document.querySelector('header.app .title');
   if (!titleEl) return;
   const dateRange = formatDateRange(uiConfig.dates || []);
-  titleEl.innerHTML = `VMW Berlin<small>${escapeHtml(uiConfig.name || '')}${dateRange ? ' · ' + dateRange : ''}</small>`;
+  const subtitle = (uiConfig.name || '') + (dateRange ? ' · ' + dateRange : '');
+  // Untertitel ist nowrap+ellipsis (CSS Code Review #12) — Full-Text als
+  // title-Attribut für Hover/Long-Press, damit auf schmalen Viewports
+  // nichts an Info verloren geht.
+  titleEl.innerHTML = `VMW Berlin<small>${escapeHtml(subtitle)}</small>`;
+  const smallEl = titleEl.querySelector('small');
+  if (smallEl) smallEl.title = subtitle;
   document.title = uiConfig.name ? `${uiConfig.name} · VMW` : 'VMW Live-App';
 
   // Zurück-Button + Trainer-Login-Icon im Header injizieren falls noch nicht da

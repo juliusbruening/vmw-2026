@@ -8,7 +8,7 @@
 // Rate-Limit: max 5 Fehlversuche pro IP / 5 Min — über Blob-basierten Counter.
 
 import { getStore } from '@netlify/blobs';
-import { listReferees } from '../../lib/referees.mjs';
+import { listRefereesIndex } from '../../lib/referees.mjs';
 
 const RATE_KEY = (ip) => `rateLimit/login/${ip}.json`;
 const MAX_ATTEMPTS = 5;
@@ -34,7 +34,8 @@ export default async (req) => {
   const code = (body?.code || '').replace(/\s+/g, '').toUpperCase();
   if (!code) return j({ ok: false, error: 'code required' }, 400);
 
-  const referees = await listReferees({ activeOnly: true, includeSecret: true });
+  // Nur den Index lesen — loginCode liegt eh dort, kein Bedarf für N Volldatensätze.
+  const referees = await listRefereesIndex({ activeOnly: true });
   // Logging: hilft beim Debug im Netlify-Function-Log
   const codesInPool = referees.map(r => (r.loginCode || '').replace(/\s+/g, '').toUpperCase());
   console.log(`[auth-login] tryCode="${code}" pool=${referees.length} codes=[${codesInPool.filter(Boolean).join(',')}]`);

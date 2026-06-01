@@ -32,6 +32,12 @@
   to     = "/.netlify/functions/public-referee-stats"
   status = 200
 
+# Public Banner: /api/banner
+[[redirects]]
+  from   = "/api/banner"
+  to     = "/.netlify/functions/banner"
+  status = 200
+
 # Auth
 [[redirects]]
   from   = "/api/auth/referee-login"

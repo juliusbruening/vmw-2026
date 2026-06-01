@@ -43,6 +43,7 @@ import {
   createExternalAssignment, updateExternalAssignment, deleteExternalAssignment,
 } from '../../lib/externalAssignments.mjs';
 import { buildEinsatzbogenForReferee } from '../../lib/einsatzbogen.mjs';
+import { getBanner, setBanner, clearBanner } from '../../lib/banner.mjs';
 
 const STORE_NAME = 'tournaments';
 const ASSIGNMENTS_KEY = (slug) => `${slug}/assignments.json`;
@@ -130,6 +131,13 @@ export default async (req) => {
   // DKV-PDF-Einsatzbogen pro Schiri (zentral durch Master)
   const pdfMatch = path.match(/^referees\/([a-z0-9-]+)\/pdf-einsatzbogen$/i);
   if (pdfMatch && req.method === 'GET') return await handleRefereePdf(pdfMatch[1], url);
+
+  // Banner (Master-only, global)
+  if (path === 'banner') {
+    if (req.method === 'GET')    return jsonResponse({ ok: true, banner: await getBanner() });
+    if (req.method === 'PUT')    return await handleBannerSet(req);
+    if (req.method === 'DELETE') return await handleBannerClear();
+  }
 
   // Reports
   if (req.method === 'GET' && path === 'reports/referees')          return await handleReport(url, 'json');
@@ -426,7 +434,11 @@ async function handleDeleteReferee(id, permanent = false) {
 async function handleGenerateCode(id) {
   const result = await generateLoginCode(id);
   if (!result) return notFound();
-  return jsonResponse({ ok: true, id, loginCode: result.loginCode, message: 'Code einmalig kopieren — wird danach nur als Hash gespeichert.' });
+  // Hinweis ehrlich gehalten: Code liegt aktuell als Klartext im Blob-Store
+  // (siehe README → Known Limitations). Hash-Speicherung ist als Issue geplant,
+  // bis dahin Master-Disziplin: Code direkt an Schiri weiter, nicht aufbewahren.
+  return jsonResponse({ ok: true, id, loginCode: result.loginCode,
+    message: 'Code an den Schiri weitergeben. Bei Verlust kannst du jederzeit einen neuen generieren (alter wird ungültig).' });
 }
 
 async function handleRevokeCode(id) {
@@ -500,6 +512,23 @@ async function handleDeleteExternal(slug, id) {
   const ok = await deleteExternalAssignment(slug, id);
   if (!ok) return notFound();
   return jsonResponse({ ok: true, id, deleted: true });
+}
+
+// ─── Banner (Master setzt globale Nachricht) ─────────────────────────────────
+
+async function handleBannerSet(req) {
+  let body; try { body = await req.json(); } catch { body = null; }
+  try {
+    const banner = await setBanner(body || {}, 'master');
+    return jsonResponse({ ok: true, banner });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+}
+
+async function handleBannerClear() {
+  await clearBanner();
+  return jsonResponse({ ok: true });
 }
 
 // ─── Master-Download: DKV-PDF pro Schiri ─────────────────────────────────────

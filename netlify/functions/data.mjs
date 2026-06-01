@@ -16,6 +16,7 @@ import { getTournament, vmwCategoriesFor } from '../../lib/tournaments.mjs';
 import { listReferees } from '../../lib/referees.mjs';
 import { listExternalAssignments } from '../../lib/externalAssignments.mjs';
 import { getRole } from '../../lib/auth.mjs';
+import { buildCacheHeadersShort } from '../../lib/cacheHeaders.mjs';
 
 export default async (req) => {
   try {
@@ -32,16 +33,10 @@ export default async (req) => {
         { status: 404, headers: { 'content-type': 'application/json' } });
     }
 
-    // Für eingeloggte User: Browser-Cache kurz (5s), CDN aus → schnelle Tab-Wechsel
-    // ohne dass Mutationen länger als 5s veraltet sind. Explizite Re-Fetches
-    // umgehen den Browser-Cache mit cache:'no-store' im fetch().
+    // Cache-Strategie siehe lib/cacheHeaders.mjs (Short-Variante, weil /api/data
+    // Live-Daten liefert und der CDN nur 5s halten darf).
     const role = await getRole(req);
-    const cacheHeaders = role
-      ? { 'cache-control': 'private, max-age=5' }
-      : {
-          'cache-control': 'public, max-age=5',
-          'netlify-cdn-cache-control': 'public, s-maxage=5, stale-while-revalidate=60',
-        };
+    const cacheHeaders = buildCacheHeadersShort(!!role);
 
     const referees = await listReferees({ activeOnly: true, includeSecret: false }).catch(() => []);
 
@@ -158,8 +153,7 @@ export default async (req) => {
       status: 200,
       headers: {
         'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'public, max-age=5',
-        'netlify-cdn-cache-control': 'public, s-maxage=5, stale-while-revalidate=60',
+        ...cacheHeaders,    // private,max-age=5 für authed; public+CDN für anon
       },
     });
   } catch (e) {

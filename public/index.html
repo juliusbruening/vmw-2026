@@ -19,7 +19,7 @@
   <header class="app">
     <div class="inner">
       <img class="logo" src="https://vmw-berlin.de/wp-content/uploads/2022/06/cropped-final_logo-3.png" alt="VMW" onerror="this.style.display='none'">
-      <div class="title">VMW Berlin<small>Deutschland Cup 2026 · 23.–25. Mai</small></div>
+      <div class="title">VMW Berlin<small>Live-App</small></div>
       <button class="updated" id="updatedBox" onclick="openModal('info')" aria-label="Letzter Datenstand · zum Erklären antippen">
         <span class="dot" id="updatedDot"></span>
         <span id="updatedText">lade …</span>
@@ -31,9 +31,9 @@
   <section class="panel active" id="panel-live">
     <h2>Heute</h2>
     <div class="day-switch" id="liveDaySwitch">
-      <button data-day="1" class="active">Sa <small>23. Mai</small></button>
-      <button data-day="2">So <small>24. Mai</small></button>
-      <button data-day="3">Mo <small>25. Mai</small></button>
+      <button data-day="1" class="active">Tag 1</button>
+      <button data-day="2">Tag 2</button>
+      <button data-day="3">Tag 3</button>
     </div>
     <div class="live-section" data-section="now">
       <h3 class="section"><span class="pulse-dot"></span> <span class="for-phone">Läuft gerade</span><span class="for-beamer">Läuft gerade</span> <span class="count" id="liveNowCount">0</span></h3>
@@ -59,9 +59,9 @@
   <section class="panel" id="panel-plan">
     <h2>Spielplan</h2>
     <div class="day-switch" id="planDaySwitch">
-      <button data-day="1" class="active">Sa <small>23. Mai</small></button>
-      <button data-day="2">So <small>24. Mai</small></button>
-      <button data-day="3">Mo <small>25. Mai</small></button>
+      <button data-day="1" class="active">Tag 1</button>
+      <button data-day="2">Tag 2</button>
+      <button data-day="3">Tag 3</button>
     </div>
     <div class="scope-row">
       <div class="seg" id="scopeSeg">
@@ -163,7 +163,7 @@
     </p>
     <div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:10px">
       <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">An Turniertagen (laut Spielplan)</div>
-      <div style="font-size:13px;color:var(--ink-2)">alle 15 Minuten, zwischen 06:00 und 23:00 Uhr (Berlin-Zeit)</div>
+      <div style="font-size:13px;color:var(--ink-2)">alle 15 Minuten, in der Regel 06–23 Uhr Berlin-Zeit (Sommerzeit) bzw. 05–22 Uhr (Winterzeit)</div>
     </div>
     <div style="background:var(--bg);border-radius:10px;padding:12px 14px;margin-bottom:10px">
       <div style="font-weight:700;font-size:13px;color:var(--ink);margin-bottom:4px">Außerhalb der Turniertage</div>

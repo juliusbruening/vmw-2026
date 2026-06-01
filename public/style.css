@@ -33,15 +33,26 @@ header.app{
   position:sticky;top:0;z-index:30;background:var(--vmw-red);color:#fff;
   padding:env(safe-area-inset-top) 14px 0;box-shadow:0 1px 0 rgba(0,0,0,.06);
 }
-header.app .inner{height:var(--header-h);display:flex;align-items:center;gap:10px}
-header.app img.logo{height:34px;width:auto;background:#fff;padding:3px 5px;border-radius:7px}
-header.app .title{font-weight:700;font-size:16px;letter-spacing:.2px;flex:1;line-height:1.1}
-header.app .title small{display:block;font-weight:400;font-size:11px;opacity:.85;margin-top:2px}
+/* Header-Layout (Code Review Finding #12):
+   - min-height statt fixer Höhe → der Titel darf bei langen Turniernamen
+     vertikal mehr Platz bekommen, statt abgeschnitten zu werden.
+   - .title: flex:1 1 auto + min-width:0 + overflow:hidden. Ohne min-width:0
+     bleiben Flex-Children mindestens min-content breit, was lange Wörter
+     sprengen und den Header in 4+ Zeilen quetscht.
+   - img.logo + .updated bekommen flex:0 0 auto — der Titel gibt zuerst nach,
+     die wichtigeren Anker (Logo, Datenstand) behalten ihre Größe.
+   - small bekommt nowrap + ellipsis: Untertitel passt in eine Zeile, lange
+     Namen werden ausgeblendet (Tooltip kommt aus title-Attribut). */
+header.app .inner{min-height:var(--header-h);display:flex;align-items:center;gap:8px;padding:6px 0}
+header.app img.logo{height:34px;width:auto;background:#fff;padding:3px 5px;border-radius:7px;flex:0 0 auto}
+header.app .title{font-weight:700;font-size:16px;letter-spacing:.2px;flex:1 1 auto;min-width:0;line-height:1.2;overflow:hidden}
+header.app .title small{display:block;font-weight:400;font-size:11px;opacity:.85;margin-top:2px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header.app .updated{
   display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:500;
   color:rgba(255,255,255,.85);
-  padding:6px 8px;border-radius:7px;background:transparent;min-height:30px;
+  padding:5px 8px;border-radius:7px;background:transparent;min-height:28px;
   transition:background .15s, color .15s;
+  flex:0 0 auto;
 }
 header.app .updated:hover{background:rgba(255,255,255,.10);color:#fff}
 header.app .updated .dot{
@@ -51,10 +62,18 @@ header.app .updated .dot{
 header.app .updated .dot.stale{background:#F9D55A;box-shadow:none}
 header.app .updated .dot.dead{background:rgba(255,255,255,.35);box-shadow:none}
 header.app .menu{
-  width:38px;height:38px;border-radius:10px;display:grid;place-items:center;
-  background:rgba(255,255,255,.14);margin-left:4px;
+  width:36px;height:36px;border-radius:10px;display:grid;place-items:center;
+  background:rgba(255,255,255,.14);margin-left:2px;flex:0 0 auto;
 }
 header.app .menu svg{width:18px;height:18px;color:#fff}
+
+/* Mobile (<480px): "Stand …"-Pill schrumpft auf reines Icon, Logout wird
+   reines 🚪 ohne Label — der Titel kriegt mehr horizontalen Raum. */
+@media (max-width: 480px) {
+  header.app .inner{gap:6px}
+  header.app .updated{padding:4px 6px;font-size:11px;min-height:26px}
+  header.app .updated #updatedText{max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
 
 nav.tabbar{
   position:fixed;left:0;right:0;bottom:0;z-index:30;background:#fff;

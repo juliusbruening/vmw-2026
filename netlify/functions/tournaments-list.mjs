@@ -6,6 +6,7 @@
 
 import { listTournaments, vmwCategoriesFor } from '../../lib/tournaments.mjs';
 import { getRole, isMaster } from '../../lib/auth.mjs';
+import { buildCacheHeaders } from '../../lib/cacheHeaders.mjs';
 
 export default async (req) => {
   const role = await getRole(req);
@@ -45,17 +46,9 @@ export default async (req) => {
     externalDays: Array.isArray(t.externalDays) ? t.externalDays : null,
   }));
 
-  // Für eingeloggte User: Browser-Cache kurz (5s), CDN aus → schnelle Tab-Wechsel
-  // ohne dass Mutationen länger als 5s alt sind. Mutationen + expliziter Re-Fetch
-  // umgehen den Browser-Cache mit `cache:'no-store'` im fetch().
-  // Anonyme User bekommen langen CDN-Cache (60s) für Skalierung.
-  const isAuthed = !!role;
-  const cacheHeaders = isAuthed
-    ? { 'cache-control': 'private, max-age=5' }
-    : {
-        'cache-control': 'public, max-age=60',
-        'netlify-cdn-cache-control': 'public, s-maxage=60, stale-while-revalidate=300',
-      };
+  // Cache-Strategie siehe lib/cacheHeaders.mjs — gemeinsamer Helper, damit der
+  // Vary-Bug nicht wieder aus einer der Routes kippt.
+  const cacheHeaders = buildCacheHeaders(!!role);
 
   return new Response(JSON.stringify({ tournaments: compact }), {
     status: 200,
