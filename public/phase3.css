@@ -730,9 +730,12 @@ body.p3-landing-mode { background: #f9fafb; }
 .p3-page-title-wrap h1 {
   font-size: 18px; margin: 0;
 }
+/* BUGFIX_EXTERNES_TURNIER#B — vorher color:#6b7280 (Grau) auf VMW-Rot;
+   das war Kontrastverhältnis ~2.1:1, weit unter WCAG-AA (4.5:1). Jetzt
+   weiß mit 85% Opacity → ~5.4:1, lesbar in beiden Light-/Dark-Modi. */
 .p3-page-sub {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  font-size: 12px; color: #6b7280;
+  font-size: 12px; color: rgba(255,255,255,0.85);
   margin-top: 4px;
   flex-wrap: wrap;
 }

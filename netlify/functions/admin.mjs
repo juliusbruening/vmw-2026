@@ -282,19 +282,21 @@ async function handleDiscover(req) {
   }
 }
 
-async function handleCreateTournament(req) {
-  let body; try { body = await req.json(); } catch { body = null; }
-  const config = body?.config;
-  if (!config?.slug || !config?.name) return badRequest('config.slug and config.name required');
-  if (!/^[a-z0-9-]{3,40}$/.test(config.slug)) return badRequest('slug muss 3-40 Zeichen [a-z0-9-]+ sein');
-
-  // Konflikt-Check
-  const existing = await getTournament(config.slug);
-  if (existing) return jsonResponse({ ok: false, error: 'slug_taken' }, { status: 409 });
-
-  // Defaults setzen
-  const now = new Date().toISOString();
-  const finalConfig = {
+/**
+ * Pure-Function-Variante der Tournament-Config-Whitelist. Exportiert für Tests.
+ *
+ * Bugfix BUGFIX_EXTERNES_TURNIER#A — `external.resources` fehlte vorher in
+ * der Whitelist. Der Wizard schickt `config.external = { resources: [...] }`,
+ * der Server hat das aber still verworfen → neue externe Turniere wurden
+ * ohne Ressourcen-Liste gespeichert (die Edit-Maske hatte das durch ihren
+ * `{ ...existing, ...patch }`-Merge zufällig kaschiert).
+ *
+ * @param {object} config - vom Wizard gesendetes Config-Objekt
+ * @param {string} now - ISO-Timestamp (DI für Tests)
+ * @returns {object} Sanitisierte Tournament-Config zum Schreiben
+ */
+export function buildCreateTournamentConfig(config, now = new Date().toISOString()) {
+  return {
     slug: config.slug,
     name: config.name,
     type: config.type || 'tournament',
@@ -310,11 +312,28 @@ async function handleCreateTournament(req) {
     lastRediscoveryAt: null,
     ourTeams: config.ourTeams || [],
     // Felder für externe Turniere (type === 'external')
+    external: config.external && typeof config.external === 'object'
+      ? { resources: Array.isArray(config.external.resources) ? config.external.resources : [] }
+      : null,
+    // Legacy-Felder — solange noch alte Configs im Blob-Store liegen
     externalUrl: config.externalUrl || null,
     externalDays: Array.isArray(config.externalDays) ? config.externalDays : null,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+async function handleCreateTournament(req) {
+  let body; try { body = await req.json(); } catch { body = null; }
+  const config = body?.config;
+  if (!config?.slug || !config?.name) return badRequest('config.slug and config.name required');
+  if (!/^[a-z0-9-]{3,40}$/.test(config.slug)) return badRequest('slug muss 3-40 Zeichen [a-z0-9-]+ sein');
+
+  // Konflikt-Check
+  const existing = await getTournament(config.slug);
+  if (existing) return jsonResponse({ ok: false, error: 'slug_taken' }, { status: 409 });
+
+  const finalConfig = buildCreateTournamentConfig(config);
   await saveTournament(finalConfig);
   return jsonResponse({ ok: true, config: finalConfig });
 }

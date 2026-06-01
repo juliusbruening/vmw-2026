@@ -99,11 +99,19 @@ function applyHeaderTitle(uiConfig){
   const titleEl = document.querySelector('header.app .title');
   if (!titleEl) return;
   const dateRange = formatDateRange(uiConfig.dates || []);
-  const subtitle = (uiConfig.name || '') + (dateRange ? ' · ' + dateRange : '');
+  // BUGFIX_EXTERNES_TURNIER#D — Hierarchie umgedreht:
+  // Auf einer Turnier-Seite ist der Turnier-Name die wichtigste Info. "VMW
+  // Berlin" steckt schon im Logo daneben und gehört nicht in die primäre
+  // Zeile. Reihenfolge jetzt:
+  //   primär  → Turnier-Name (z.B. "Deutschland Cup 2026")
+  //   small   → "VMW Berlin · 23.–25. Mai 2026"
+  const primary = uiConfig.name || 'Turnier';
+  const subtitle = 'VMW Berlin' + (dateRange ? ' · ' + dateRange : '');
   // Untertitel ist nowrap+ellipsis (CSS Code Review #12) — Full-Text als
   // title-Attribut für Hover/Long-Press, damit auf schmalen Viewports
-  // nichts an Info verloren geht.
-  titleEl.innerHTML = `VMW Berlin<small>${escapeHtml(subtitle)}</small>`;
+  // nichts verloren geht.
+  titleEl.innerHTML = `${escapeHtml(primary)}<small>${escapeHtml(subtitle)}</small>`;
+  titleEl.title = primary;
   const smallEl = titleEl.querySelector('small');
   if (smallEl) smallEl.title = subtitle;
   document.title = uiConfig.name ? `${uiConfig.name} · VMW` : 'VMW Live-App';
@@ -364,6 +372,7 @@ const state = {
   lastFetchOk: 0,
   lastFetchAt: 0,
   fetchError: null,
+  pollTimer: null,   // setInterval-Handle; wird gecleart sobald wir extern detecten
 };
 function save(k,v){ localStorage.setItem('vmw.'+k, v); }
 // State global verfügbar machen, damit phase3.js (Picker, Profil, Master-Admin) darauf zugreifen kann.
@@ -1346,18 +1355,23 @@ async function fetchData(){
     // Config-Felder zuerst anwenden, damit TEAMS + TOURNAMENT_DATES für die nächste
     // Render-Iteration korrekt gefüllt sind (deriveLiveByTime nutzt TOURNAMENT_DATES).
     // External Tournament: phase3.js rendert das Dashboard.
-    // - Beim Initial-Load: Body bleibt versteckt, phase3.js's bootstrapRoute übernimmt.
-    // - Mid-Session (z.B. Tournament wurde gerade auf 'external' konvertiert):
-    //   Reload, damit phase3.js sauber neu startet — sonst weißer Bildschirm,
-    //   weil app.js polled aber phase3.js nicht mehr triggert.
+    // - Beim Initial-Load übernimmt phase3.js's bootstrapRoute — Body bleibt
+    //   da unangetastet (phase3.js setzt visibility selbst).
+    // - Mid-Session (Tournament wurde gerade auf 'external' konvertiert):
+    //   einmaliger Reload, damit phase3.js sauber neu startet.
+    // - In jedem Fall: app.js-Polling sofort beenden (BUGFIX_EXTERNES_TURNIER#C).
+    //   Sonst feuert das setInterval später noch einmal hier rein und kann den
+    //   von phase3.js längst gerenderten Body wieder unsichtbar machen — das
+    //   war die Wurzel des "Seite wird nach ~60s weiß"-Bugs.
     if (data.external) {
+      if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
       if (state.lastFetchOk) {
-        // Schon erfolgreich gerendert vorher → Mid-Session-Konversion
+        // Schon erfolgreich von app.js gerendert vorher → Mid-Session-Konversion
         window.location.reload();
-        return;
       }
-      // Initial-Load → leise verstecken, phase3.js macht's
-      document.body.style.visibility = 'hidden';
+      // KEIN visibility:hidden mehr — phase3.js's bootstrapRoute übernimmt eh
+      // den Body; ihn hier zu verstecken hat beim Re-Poll die bereits
+      // gerenderte Seite ausgeblendet.
       return;
     }
     if (data.config) applyConfigToFrontend(data.config);
@@ -1457,6 +1471,8 @@ if (CURRENT_SLUG) {
   // Visibility NICHT sofort — erst nach dem ersten fetchData wissen wir, ob app.js
   // (kayakers-Spielplan) oder phase3.js (externes Dashboard) übernimmt. Wenn
   // external: phase3.js setzt visibility. Wenn kayakers: renderActiveTab tut es.
+  // Das setInterval-Handle wird in state.pollTimer gehalten, damit fetchData()
+  // es bei `data.external` clearen kann (BUGFIX_EXTERNES_TURNIER#C).
   fetchData();
-  setInterval(fetchData, POLL_INTERVAL_MS);
+  state.pollTimer = setInterval(fetchData, POLL_INTERVAL_MS);
 }
